@@ -38,15 +38,11 @@ jobs:
       - name: Add Android SDK to PATH
         run: echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
-      - name: Build scratch-gui
-        run: |
-          cd scratch-gui
-          npm ci
-          npm run build
-        working-directory: ./scratch-gui
-
       - name: Run prebuild (sync Capacitor)
         run: npm run prebuild
+
+      - name: Sync Capacitor plugins
+        run: npx cap sync android
 
       - name: Create local.properties for Android SDK
         run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
