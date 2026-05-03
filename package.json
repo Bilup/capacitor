@@ -1,0 +1,30 @@
+{
+  "name": "bilup-capacitor",
+  "version": "1.0.0",
+  "description": "Bilup Desktop Capacitor Version",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Bilup/capacitor.git"
+  },
+  "author": {
+    "email": "support@bilup.org",
+    "name": "Bilup"
+  },
+  "license": "GPL-3.0",
+  "bugs": {
+    "url": "https://github.com/Bilup/capacitor/issues"
+  },
+  "homepage": "https://github.com/Bilup/capacitor#readme",
+  "private": true,
+  "scripts": {
+    "prebuild": "npm run fetch:gui && npm run cap:copy",
+    "fetch:gui": "git clone -b develop-builds --single-branch https://github.com/Bilup/scratch-gui.git",
+    "cap:copy": "npx cap copy",
+    "cap:open": "npx cap open android"
+  },
+  "dependencies": {
+    "@capacitor/android": "^8.3.1",
+    "@capacitor/cli": "^8.3.1",
+    "@capacitor/core": "^8.3.1"
+  }
+}

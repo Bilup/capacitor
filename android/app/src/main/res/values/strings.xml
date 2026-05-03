@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Bilup</string>
+    <string name="title_activity_main">Bilup</string>
+    <string name="package_name">com.bilup.app</string>
+    <string name="custom_url_scheme">com.bilup.app</string>
+</resources>
