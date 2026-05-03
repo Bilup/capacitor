@@ -48,11 +48,59 @@ jobs:
       - name: Run prebuild (sync Capacitor)
         run: npm run prebuild
 
+      - name: Create local.properties for Android SDK
+        run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+
+      - name: Decode Keystore
+        run: |
+          echo "$KEYSTORE_FILE" | base64 -d > android/app/release.keystore
+        env:
+          KEYSTORE_FILE: ${{ secrets.KEYSTORE_FILE }}
+
+      - name: Add signing config to build.gradle
+        run: |
+          if grep -q "signingConfig signingConfigs.release" android/app/build.gradle; then
+            echo "Signing config already exists"
+          else
+            sed -i 's/signningConfig signingConfigs.release/signingConfig signingConfigs.release/g' android/app/build.gradle
+            sed -i '/buildTypes {/,/release {/ { /release {/a\            signingConfig signingConfigs.release
+            }' android/app/build.gradle
+          fi
+
+      - name: Create signing.gradle
+        run: |
+          cat > android/signing.gradle << 'EOF'
+          android.signingConfigs {
+              release {
+                  storeFile file('release.keystore')
+                  storePassword System.getenv("KEYSTORE_PASSWORD")
+                  keyAlias System.getenv("KEY_ALIAS")
+                  keyPassword System.getenv("KEY_PASSWORD")
+              }
+          }
+          EOF
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+
+      - name: Apply signing.gradle
+        run: |
+          if ! grep -q "apply from: '../signing.gradle'" android/app/build.gradle; then
+            sed -i "/apply plugin: 'com.android.application'/a\\
+          apply from: '../signing.gradle'
+          " android/app/build.gradle
+          fi
+
       - name: Build Android APK (Release)
         run: |
           cd android
           chmod +x gradlew
           ./gradlew assembleRelease
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
