@@ -2,16 +2,15 @@ name: Build Android APK (Release)
 
 on:
   push:
-    branches:
-      - main
-  pull_request:
-    branches:
-      - main
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 jobs:
-  build:
+  build-gui:
     runs-on: ubuntu-22.04
+    outputs:
+      gui-built: 'true'
 
     steps:
       - name: Checkout repository
@@ -25,19 +24,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Setup Java JDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-          cache: 'gradle'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Add Android SDK to PATH
-        run: echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
       - name: Fetch scratch-gui repository
         run: |
@@ -74,13 +60,55 @@ jobs:
           npx cap copy
           npx cap sync android
 
+      - name: Upload Android project
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-project
+          path: android/
+          retention-days: 1
+
+  build-apk:
+    needs: build-gui
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        arch: [x64, x86]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Add Android SDK to PATH
+        run: echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
+
+      - name: Download Android project
+        uses: actions/download-artifact@v4
+        with:
+          name: android-project
+          path: android/
+
       - name: Create local.properties for Android SDK
         run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
-      - name: Decode Keystore
-        run: echo "$KEYSTORE_FILE" | base64 -d > android/app/release.keystore
-        env:
-          KEYSTORE_FILE: ${{ secrets.KEYSTORE_FILE }}
+      - name: Generate PKCS12 Keystore
+        run: |
+          keytool -genkeypair -v -keystore android/app/release.keystore \
+            -alias ${{ secrets.KEY_ALIAS }} \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass ${{ secrets.KEYSTORE_PASSWORD }} \
+            -keypass ${{ secrets.KEY_PASSWORD }} \
+            -dname "CN=Bilup, OU=Bilup, O=Bilup, L=Beijing, ST=Beijing, C=CN" \
+            -storetype PKCS12
 
       - name: Cache Gradle wrapper and dependencies
         uses: actions/cache@v4
@@ -92,11 +120,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Build Android APK (Release)
+      - name: Build Android APK (Release - ${{ matrix.arch }})
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleRelease --no-daemon --parallel --build-cache -x test -x lint
+          ./gradlew assembleRelease --no-daemon --parallel --build-cache -x test -x lint -Pandroid.defaultConfig.ndk.abiFilters=${{ matrix.arch == 'x64' ? 'x86_64' : 'x86' }}
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
@@ -104,9 +132,52 @@ jobs:
           GRADLE_OPTS: "-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g"
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
 
-      - name: Upload Release APK
+      - name: Upload Release APK (${{ matrix.arch }})
         uses: actions/upload-artifact@v4
         with:
-          name: release-apk
+          name: release-apk-${{ matrix.arch }}
           path: android/app/build/outputs/apk/release/*.apk
           retention-days: 30
+
+  publish-release:
+    needs: build-apk
+    runs-on: ubuntu-22.04
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download x64 APK
+        uses: actions/download-artifact@v4
+        with:
+          name: release-apk-x64
+          path: ./apks/
+
+      - name: Download x86 APK
+        uses: actions/download-artifact@v4
+        with:
+          name: release-apk-x86
+          path: ./apks/
+
+      - name: List APK files
+        run: ls -la ./apks/
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: Release ${{ github.ref_name }}
+          body: |
+            ## Bilup Android App Release
+
+            ### Downloads
+            - **x64**: `app-x86_64-release.apk`
+            - **x86**: `app-x86-release.apk`
+
+            ### Changes
+            - Built from tag: `${{ github.ref_name }}`
+            - Commit: `${{ github.sha }}`
+          files: |
+            ./apks/*.apk
+          draft: false
+          prerelease: false

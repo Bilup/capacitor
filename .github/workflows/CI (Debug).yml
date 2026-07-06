@@ -10,8 +10,10 @@ on:
   workflow_dispatch:
 
 jobs:
-  build:
+  build-gui:
     runs-on: ubuntu-22.04
+    outputs:
+      gui-built: 'true'
 
     steps:
       - name: Checkout repository
@@ -25,19 +27,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Setup Java JDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-          cache: 'gradle'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Add Android SDK to PATH
-        run: echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
       - name: Fetch scratch-gui repository
         run: |
@@ -74,6 +63,43 @@ jobs:
           npx cap copy
           npx cap sync android
 
+      - name: Upload Android project
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-project
+          path: android/
+          retention-days: 1
+
+  build-apk:
+    needs: build-gui
+    runs-on: ubuntu-22.04
+    strategy:
+      matrix:
+        arch: [x64, x86]
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Add Android SDK to PATH
+        run: echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
+
+      - name: Download Android project
+        uses: actions/download-artifact@v4
+        with:
+          name: android-project
+          path: android/
+
       - name: Create local.properties for Android SDK
         run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
@@ -87,18 +113,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Build Android APK (Debug)
+      - name: Build Android APK (Debug - ${{ matrix.arch }})
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --parallel --build-cache -x test -x lint
+          ./gradlew assembleDebug --no-daemon --parallel --build-cache -x test -x lint -Pandroid.defaultConfig.ndk.abiFilters=${{ matrix.arch == 'x64' ? 'x86_64' : 'x86' }}
         env:
           GRADLE_OPTS: "-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g"
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
 
-      - name: Upload Debug APK
+      - name: Upload Debug APK (${{ matrix.arch }})
         uses: actions/upload-artifact@v4
         with:
-          name: debug-apk
+          name: debug-apk-${{ matrix.arch }}
           path: android/app/build/outputs/apk/debug/*.apk
           retention-days: 14
