@@ -35,12 +35,21 @@ android {
             signingConfig signingConfigs.release
         }
     }
+    splits {
+        abi {
+            enable true
+            reset()
+            include 'x86', 'x86_64'
+            universalApk false
+        }
+    }
     applicationVariants.all { variant ->
         variant.outputs.each { output ->
             def abi = output.getFilter(com.android.build.OutputFile.ABI)
             def abiSuffix = abi == 'x86_64' ? '64' : (abi == 'x86' ? 'x86' : '')
             def flavor = variant.flavorName
             def version = defaultConfig.versionName
+            def buildType = variant.buildType.name
             output.outputFileName = "Bilup-android-${flavor}-${version}-${abiSuffix}.apk"
         }
     }

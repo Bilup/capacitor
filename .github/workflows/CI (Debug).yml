@@ -73,13 +73,6 @@ jobs:
   build-apk-phone:
     needs: build-gui
     runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        include:
-          - arch: x64
-            abi: x86_64
-          - arch: x86
-            abi: x86
 
     steps:
       - name: Checkout repository
@@ -126,32 +119,25 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Build Android APK (Debug - Phone - ${{ matrix.arch }})
+      - name: Build Android APK (Debug - Phone)
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assemblePhoneDebug --no-daemon --parallel --build-cache -x test -x lint -Pandroid.defaultConfig.ndk.abiFilters=${{ matrix.abi }}
+          ./gradlew assemblePhoneDebug --no-daemon --parallel --build-cache -x test -x lint
         env:
           GRADLE_OPTS: "-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g"
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
 
-      - name: Upload Debug APK (Phone - ${{ matrix.arch }})
+      - name: Upload Debug APK (Phone)
         uses: actions/upload-artifact@v4
         with:
-          name: debug-apk-phone-${{ matrix.arch }}
+          name: debug-apk-phone
           path: android/app/build/outputs/apk/phone/debug/*.apk
           retention-days: 14
 
   build-apk-tablet:
     needs: build-gui
     runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        include:
-          - arch: x64
-            abi: x86_64
-          - arch: x86
-            abi: x86
 
     steps:
       - name: Checkout repository
@@ -198,18 +184,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Build Android APK (Debug - Tablet - ${{ matrix.arch }})
+      - name: Build Android APK (Debug - Tablet)
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleTabletDebug --no-daemon --parallel --build-cache -x test -x lint -Pandroid.defaultConfig.ndk.abiFilters=${{ matrix.abi }}
+          ./gradlew assembleTabletDebug --no-daemon --parallel --build-cache -x test -x lint
         env:
           GRADLE_OPTS: "-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g"
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
 
-      - name: Upload Debug APK (Tablet - ${{ matrix.arch }})
+      - name: Upload Debug APK (Tablet)
         uses: actions/upload-artifact@v4
         with:
-          name: debug-apk-tablet-${{ matrix.arch }}
+          name: debug-apk-tablet
           path: android/app/build/outputs/apk/tablet/debug/*.apk
           retention-days: 14

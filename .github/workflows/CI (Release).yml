@@ -73,13 +73,6 @@ jobs:
   build-apk-phone:
     needs: build-gui
     runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        include:
-          - arch: x64
-            abi: x86_64
-          - arch: x86
-            abi: x86
 
     steps:
       - name: Checkout repository
@@ -139,11 +132,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Build Android APK (Release - Phone - ${{ matrix.arch }})
+      - name: Build Android APK (Release - Phone)
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assemblePhoneRelease --no-daemon --parallel --build-cache -x test -x lint -Pandroid.defaultConfig.ndk.abiFilters=${{ matrix.abi }}
+          ./gradlew assemblePhoneRelease --no-daemon --parallel --build-cache -x test -x lint
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
@@ -151,23 +144,16 @@ jobs:
           GRADLE_OPTS: "-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g"
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
 
-      - name: Upload Release APK (Phone - ${{ matrix.arch }})
+      - name: Upload Release APK (Phone)
         uses: actions/upload-artifact@v4
         with:
-          name: release-apk-phone-${{ matrix.arch }}
+          name: release-apk-phone
           path: android/app/build/outputs/apk/phone/release/*.apk
           retention-days: 30
 
   build-apk-tablet:
     needs: build-gui
     runs-on: ubuntu-22.04
-    strategy:
-      matrix:
-        include:
-          - arch: x64
-            abi: x86_64
-          - arch: x86
-            abi: x86
 
     steps:
       - name: Checkout repository
@@ -227,11 +213,11 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-gradle-
 
-      - name: Build Android APK (Release - Tablet - ${{ matrix.arch }})
+      - name: Build Android APK (Release - Tablet)
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleTabletRelease --no-daemon --parallel --build-cache -x test -x lint -Pandroid.defaultConfig.ndk.abiFilters=${{ matrix.abi }}
+          ./gradlew assembleTabletRelease --no-daemon --parallel --build-cache -x test -x lint
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
@@ -239,10 +225,10 @@ jobs:
           GRADLE_OPTS: "-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g"
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
 
-      - name: Upload Release APK (Tablet - ${{ matrix.arch }})
+      - name: Upload Release APK (Tablet)
         uses: actions/upload-artifact@v4
         with:
-          name: release-apk-tablet-${{ matrix.arch }}
+          name: release-apk-tablet
           path: android/app/build/outputs/apk/tablet/release/*.apk
           retention-days: 30
 
@@ -261,28 +247,16 @@ jobs:
         with:
           node-version: 24
 
-      - name: Download Phone x64 APK
+      - name: Download Phone APKs
         uses: actions/download-artifact@v4
         with:
-          name: release-apk-phone-x64
+          name: release-apk-phone
           path: ./apks/
 
-      - name: Download Phone x86 APK
+      - name: Download Tablet APKs
         uses: actions/download-artifact@v4
         with:
-          name: release-apk-phone-x86
-          path: ./apks/
-
-      - name: Download Tablet x64 APK
-        uses: actions/download-artifact@v4
-        with:
-          name: release-apk-tablet-x64
-          path: ./apks/
-
-      - name: Download Tablet x86 APK
-        uses: actions/download-artifact@v4
-        with:
-          name: release-apk-tablet-x86
+          name: release-apk-tablet
           path: ./apks/
 
       - name: List APK files
