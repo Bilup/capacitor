@@ -75,7 +75,11 @@ jobs:
     runs-on: ubuntu-22.04
     strategy:
       matrix:
-        arch: [x64, x86]
+        include:
+          - arch: x64
+            abi: x86_64
+          - arch: x86
+            abi: x86
 
     steps:
       - name: Checkout repository
@@ -117,7 +121,7 @@ jobs:
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --parallel --build-cache -x test -x lint -Pandroid.defaultConfig.ndk.abiFilters=${{ matrix.arch == 'x64' ? 'x86_64' : 'x86' }}
+          ./gradlew assembleDebug --no-daemon --parallel --build-cache -x test -x lint -Pandroid.defaultConfig.ndk.abiFilters=${{ matrix.abi }}
         env:
           GRADLE_OPTS: "-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g"
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
