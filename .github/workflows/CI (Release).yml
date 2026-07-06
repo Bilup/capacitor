@@ -162,6 +162,8 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Download x64 APK
         uses: actions/download-artifact@v4
@@ -179,21 +181,20 @@ jobs:
         run: ls -la ./apks/
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: Release ${{ github.ref_name }}
-          body: |
-            ## Bilup Android App Release
+        run: |
+          gh release create ${{ github.ref_name }} \
+            --title "${{ github.ref_name }}" \
+            --notes "## Bilup Android App Release
 
-            ### Downloads
-            - **x64**: `app-x86_64-release.apk`
-            - **x86**: `app-x86-release.apk`
+          ### Downloads
+          - **x64**: app-x86_64-release.apk
+          - **x86**: app-x86-release.apk
 
-            ### Changes
-            - Built from tag: `${{ github.ref_name }}`
-            - Commit: `${{ github.sha }}`
-          files: |
-            ./apks/*.apk
-          draft: false
-          prerelease: false
+          ### Changes
+          - Built from tag: ${{ github.ref_name }}
+          - Commit: ${{ github.sha }}" \
+                      ./apks/*.apk
+          
+          About more informations, view [desktop](https://github.com/Bilup/desktop)
+        env:
+          GH_TOKEN: ${{ secrets.GH_PAT }}
