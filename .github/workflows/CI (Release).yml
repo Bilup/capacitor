@@ -180,21 +180,10 @@ jobs:
       - name: List APK files
         run: ls -la ./apks/
 
-      - name: Create GitHub Release
+      - name: Upload APKs to existing Release
         run: |
-          gh release create ${{ github.ref_name }} \
-            --title "${{ github.ref_name }}" \
-            --notes "## Bilup Android App Release
-
-          ### Downloads
-          - **x64**: app-x86_64-release.apk
-          - **x86**: app-x86-release.apk
-
-          ### Changes
-          - Built from tag: ${{ github.ref_name }}
-          - Commit: ${{ github.sha }}" \
-                      ./apks/*.apk
-          
-          About more informations, view [desktop](https://github.com/Bilup/desktop)
+          gh release upload ${{ github.ref_name }} \
+            --clobber \
+            ./apks/*.apk
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
