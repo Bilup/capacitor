@@ -35,7 +35,6 @@ public class MainActivity extends BridgeActivity {
         settings.setMediaPlaybackRequiresUserGesture(false);
         
         settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        settings.setAppCacheEnabled(true);
         settings.setDatabaseEnabled(true);
         settings.setGeolocationEnabled(true);
         
