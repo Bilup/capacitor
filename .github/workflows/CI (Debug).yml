@@ -58,6 +58,9 @@ jobs:
       - name: Build scratch-gui
         run: cd scratch-gui && bun run build
 
+      - name: Patch scratch-gui for desktop mode
+        run: node scripts/patch-gui.js
+
       - name: Sync Capacitor and copy web assets
         run: |
           npx cap copy

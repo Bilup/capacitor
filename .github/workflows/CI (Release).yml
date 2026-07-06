@@ -6,6 +6,9 @@ on:
       - 'v*'
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build-gui:
     runs-on: ubuntu-22.04
@@ -54,6 +57,9 @@ jobs:
 
       - name: Build scratch-gui
         run: cd scratch-gui && bun run build
+
+      - name: Patch scratch-gui for desktop mode
+        run: node scripts/patch-gui.js
 
       - name: Sync Capacitor and copy web assets
         run: |
@@ -165,6 +171,11 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
       - name: Download x64 APK
         uses: actions/download-artifact@v4
         with:
@@ -180,10 +191,12 @@ jobs:
       - name: List APK files
         run: ls -la ./apks/
 
-      - name: Upload APKs to existing Release
+      - name: Upload to GitHub Releases
+        shell: bash
         run: |
-          gh release upload ${{ github.ref_name }} \
-            --clobber \
-            ./apks/*.apk
+          node scripts/upload-to-github-releases.mjs \
+            "${{ github.repository_owner }}" \
+            "${{ github.event.repository.name }}" \
+            "apks/**/*.apk"
         env:
-          GH_TOKEN: ${{ secrets.GH_PAT }}
+          GH_TOKEN: "${{ github.token }}"
