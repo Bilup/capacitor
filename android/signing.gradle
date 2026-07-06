@@ -1,0 +1,8 @@
+android.signingConfigs {
+    release {
+        storeFile file('release.keystore')
+        storePassword System.getenv("KEYSTORE_PASSWORD") ?: "bilup123"
+        keyAlias System.getenv("KEY_ALIAS") ?: "bilup"
+        keyPassword System.getenv("KEY_PASSWORD") ?: "bilup123"
+    }
+}

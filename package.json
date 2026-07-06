@@ -17,9 +17,11 @@
   "homepage": "https://github.com/Bilup/capacitor#readme",
   "private": true,
   "scripts": {
-    "prebuild": "npm run fetch:gui && npm run cap:copy",
-    "fetch:gui": "git clone -b develop-builds --single-branch https://github.com/Bilup/scratch-gui.git",
+    "prebuild": "npm run fetch:gui && npm run build:gui && npm run cap:copy",
+    "fetch:gui": "if [ -d scratch-gui ]; then cd scratch-gui && git pull origin develop; else git clone -b develop --single-branch https://github.com/Bilup/scratch-gui.git; fi",
+    "build:gui": "cd scratch-gui && npm ci && npm run build",
     "cap:copy": "npx cap copy",
+    "cap:sync": "npx cap sync android",
     "cap:open": "npx cap open android"
   },
   "dependencies": {

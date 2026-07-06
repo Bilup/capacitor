@@ -1,4 +1,4 @@
-name: Build Android APK
+name: Build Android APK(Debug)
 
 on:
   push:
@@ -40,6 +40,12 @@ jobs:
 
       - name: Run prebuild (sync Capacitor)
         run: npm run prebuild
+
+      - name: Sync Capacitor plugins
+        run: npx cap sync android
+
+      - name: Create local.properties for Android SDK
+        run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
 
       - name: Build Android APK (Debug)
         run: |

@@ -1,4 +1,5 @@
 apply plugin: 'com.android.application'
+apply from: '../signing.gradle'
 
 android {
     namespace = "org.bilup.app"
@@ -20,6 +21,7 @@ android {
         release {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
+            signingConfig signingConfigs.release
         }
     }
 }
