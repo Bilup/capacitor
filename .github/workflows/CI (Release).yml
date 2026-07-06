@@ -82,6 +82,15 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
       - name: Setup Java JDK
         uses: actions/setup-java@v4
         with:
@@ -103,6 +112,9 @@ jobs:
 
       - name: Create local.properties for Android SDK
         run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+
+      - name: Remove existing keystore if present
+        run: rm -f android/app/release.keystore
 
       - name: Generate PKCS12 Keystore
         run: |
