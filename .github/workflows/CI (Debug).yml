@@ -56,12 +56,18 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-scratch-gui-
 
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+          cache: true
+
       - name: Install scratch-gui dependencies (if cache miss)
         if: steps.scratch-gui-cache.outputs.cache-hit != 'true'
-        run: cd scratch-gui && npm ci
+        run: cd scratch-gui && bun install
 
       - name: Build scratch-gui
-        run: cd scratch-gui && npm run build
+        run: cd scratch-gui && bun run build
 
       - name: Sync Capacitor and copy web assets
         run: |
