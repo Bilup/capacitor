@@ -12,9 +12,20 @@ android {
         versionName "1.4"
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
-             // Files and dirs to omit from the packaged assets dir, modified to accommodate modern web apps.
-             // Default: https://android.googlesource.com/platform/frameworks/base/+/282e181b58cf72b6ca770dc7ca5f91f135444502/tools/aapt/AaptAssets.cpp#61
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+        }
+    }
+    flavorDimensions "device"
+    productFlavors {
+        phone {
+            dimension "device"
+            applicationIdSuffix ".phone"
+            versionNameSuffix "-phone"
+        }
+        tablet {
+            dimension "device"
+            applicationIdSuffix ".tablet"
+            versionNameSuffix "-tablet"
         }
     }
     buildTypes {
@@ -22,6 +33,15 @@ android {
             minifyEnabled false
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
             signingConfig signingConfigs.release
+        }
+    }
+    applicationVariants.all { variant ->
+        variant.outputs.each { output ->
+            def abi = output.getFilter(com.android.build.OutputFile.ABI)
+            def abiSuffix = abi == 'x86_64' ? '64' : (abi == 'x86' ? 'x86' : '')
+            def flavor = variant.flavorName
+            def version = defaultConfig.versionName
+            output.outputFileName = "Bilup-android-${flavor}-${version}-${abiSuffix}.apk"
         }
     }
 }

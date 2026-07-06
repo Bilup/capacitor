@@ -1,5 +1,14 @@
 {
   "appId": "org.bilup.app",
   "appName": "Bilup",
-  "webDir": "scratch-gui/build"
+  "webDir": "scratch-gui/build",
+  "server": {
+    "androidScheme": "https"
+  },
+  "android": {
+    "allowMixedContent": true,
+    "minSdkVersion": 21,
+    "targetSdkVersion": 35,
+    "compileSdkVersion": 35
+  }
 }
