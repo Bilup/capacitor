@@ -1,4 +1,4 @@
-name: Build Android APK(Debug)
+name: Build Android APK (Debug)
 
 on:
   push:
@@ -11,7 +11,7 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
 
     steps:
       - name: Checkout repository
@@ -30,7 +30,8 @@ jobs:
         uses: actions/setup-java@v4
         with:
           distribution: 'temurin'
-          java-version: '17'
+          java-version: '21'
+          cache: 'gradle'
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
@@ -38,20 +39,56 @@ jobs:
       - name: Add Android SDK to PATH
         run: echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
 
-      - name: Run prebuild (sync Capacitor)
-        run: npm run prebuild
+      - name: Fetch scratch-gui repository
+        run: |
+          if [ -d scratch-gui ]; then
+            cd scratch-gui && git pull origin develop
+          else
+            git clone -b develop --single-branch https://github.com/Bilup/scratch-gui.git
+          fi
 
-      - name: Sync Capacitor plugins
-        run: npx cap sync android
+      - name: Cache scratch-gui dependencies
+        uses: actions/cache@v4
+        id: scratch-gui-cache
+        with:
+          path: scratch-gui/node_modules
+          key: ${{ runner.os }}-scratch-gui-${{ hashFiles('scratch-gui/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.os }}-scratch-gui-
+
+      - name: Install scratch-gui dependencies (if cache miss)
+        if: steps.scratch-gui-cache.outputs.cache-hit != 'true'
+        run: cd scratch-gui && npm ci
+
+      - name: Build scratch-gui
+        run: cd scratch-gui && npm run build
+
+      - name: Sync Capacitor and copy web assets
+        run: |
+          npx cap copy
+          npx cap sync android
 
       - name: Create local.properties for Android SDK
         run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+
+      - name: Cache Gradle wrapper and dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
 
       - name: Build Android APK (Debug)
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assembleDebug
+          ./gradlew assembleDebug --no-daemon --parallel --build-cache -x test -x lint
+        env:
+          GRADLE_OPTS: "-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g"
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
 
       - name: Upload Debug APK
         uses: actions/upload-artifact@v4
