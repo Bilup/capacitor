@@ -120,9 +120,7 @@ jobs:
         with:
           packages: |
             build-tools;35.0.0
-            platform-tools
             platforms;android-35
-            cmdline-tools;latest
         timeout-minutes: 15
 
       - name: Add Android SDK to PATH
