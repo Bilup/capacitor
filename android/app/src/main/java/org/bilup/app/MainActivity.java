@@ -73,26 +73,82 @@ public class MainActivity extends BridgeActivity {
                 "style.textContent = 'body { min-width: 1280px; overflow: auto; }';" +
                 "document.head.appendChild(style);" +
                 "var debounceTimer = null;" +
-                "var hideWorkPageButton = function() {" +
+                "var restrictedPatterns = [" +
+                    "/^\\s*隐私政策\\s*$/, " +
+                    "/^\\s*Privacy Policy\\s*$/, " +
+                    "/^\\s*隐私\\s*$/, " +
+                    "/^\\s*Privacy\\s*$/, " +
+                    "/^\\s*鸣谢\\s*$/, " +
+                    "/^\\s*Credits\\s*$/, " +
+                    "/^\\s*关于\\s*$/, " +
+                    "/^\\s*About\\s*$/, " +
+                    "/^\\s*关于我们\\s*$/, " +
+                    "/^\\s*About Us\\s*$/" +
+                "];" +
+                "var hideRestrictedElements = function() {" +
                     "var buttons = document.querySelectorAll('button, a');" +
                     "buttons.forEach(function(btn) {" +
                         "var text = btn.textContent || btn.innerText || '';" +
-                        "if (text.indexOf('切换到作品页面') !== -1) {" +
+                        "var trimmedText = text.trim();" +
+                        "if (trimmedText.indexOf('切换到作品页面') !== -1) {" +
+                            "btn.style.display = 'none';" +
+                            "btn.disabled = true;" +
+                            "return;" +
+                        "}" +
+                        "var isRestricted = restrictedPatterns.some(function(pattern) {" +
+                            "return pattern.test(trimmedText);" +
+                        "});" +
+                        "if (isRestricted) {" +
                             "btn.style.display = 'none';" +
                             "btn.disabled = true;" +
                         "}" +
                     "});" +
+                    "var accountInfoGroup = document.querySelector('[class*=\"account-info-group\"]');" +
+                    "if (accountInfoGroup) {" +
+                        "var infoButtons = accountInfoGroup.querySelectorAll('button');" +
+                        "if (infoButtons.length > 0) {" +
+                            "var lastBtn = infoButtons[infoButtons.length - 1];" +
+                            "lastBtn.style.display = 'none';" +
+                        "}" +
+                    "}" +
+                    "var menuItems = document.querySelectorAll('[class*=\"menuBarItem\"], [class*=\"menu-bar-item\"]');" +
+                    "menuItems.forEach(function(item) {" +
+                        "var iconChild = item.querySelector('svg, [data-lucide=\"info\"]');" +
+                        "if (iconChild && accountInfoGroup && accountInfoGroup.contains(item)) {" +
+                            "item.style.display = 'none';" +
+                        "}" +
+                    "});" +
                 "};" +
-                "hideWorkPageButton();" +
+                "hideRestrictedElements();" +
                 "if (document.body) {" +
                     "var observer = new MutationObserver(function(mutations) {" +
                         "if (debounceTimer) {" +
                             "clearTimeout(debounceTimer);" +
                         "}" +
-                        "debounceTimer = setTimeout(hideWorkPageButton, 100);" +
+                        "debounceTimer = setTimeout(hideRestrictedElements, 100);" +
                     "});" +
                     "observer.observe(document.body, { childList: true, subtree: true });" +
                 "}" +
+                "document.addEventListener('click', function(e) {" +
+                    "var target = e.target;" +
+                    "while (target) {" +
+                        "var text = target.textContent || target.innerText || '';" +
+                        "var trimmedText = text.trim();" +
+                        "var href = target.getAttribute('href') || '';" +
+                        "var isRestricted = restrictedPatterns.some(function(pattern) {" +
+                            "return pattern.test(trimmedText);" +
+                        "});" +
+                        "var isRestrictedLink = href.indexOf('privacy') !== -1 || " +
+                            "href.indexOf('credits') !== -1 || " +
+                            "href.indexOf('about') !== -1;" +
+                        "if (isRestricted || isRestrictedLink) {" +
+                            "e.preventDefault();" +
+                            "e.stopPropagation();" +
+                            "return false;" +
+                        "}" +
+                        "target = target.parentElement;" +
+                    "}" +
+                "}, true);" +
             "}" +
         "})();";
         
