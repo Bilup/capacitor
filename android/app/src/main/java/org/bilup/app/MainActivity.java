@@ -83,7 +83,9 @@ public class MainActivity extends BridgeActivity {
                     "/^\\s*关于\\s*$/, " +
                     "/^\\s*About\\s*$/, " +
                     "/^\\s*关于我们\\s*$/, " +
-                    "/^\\s*About Us\\s*$/" +
+                    "/^\\s*About Us\\s*$/, " +
+                    "/^\\s*捐赠\\s*$/, " +
+                    "/^\\s*Donate\\s*$/" +
                 "];" +
                 "var hideRestrictedElements = function() {" +
                     "var buttons = document.querySelectorAll('button, a');" +
@@ -140,7 +142,8 @@ public class MainActivity extends BridgeActivity {
                         "});" +
                         "var isRestrictedLink = href.indexOf('privacy') !== -1 || " +
                             "href.indexOf('credits') !== -1 || " +
-                            "href.indexOf('about') !== -1;" +
+                            "href.indexOf('about') !== -1 || " +
+                            "href.indexOf('donate') !== -1;" +
                         "if (isRestricted || isRestrictedLink) {" +
                             "e.preventDefault();" +
                             "e.stopPropagation();" +
