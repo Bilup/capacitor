@@ -120,7 +120,7 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          sdk-packages: |
+          packages: |
             build-tools;35.0.0
             platform-tools
             platforms;android-35
