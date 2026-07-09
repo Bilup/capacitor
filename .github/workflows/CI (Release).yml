@@ -1,4 +1,4 @@
-name: Build Android APK (Release)
+name: CI (Release)
 
 on:
   push:
@@ -12,6 +12,7 @@ permissions:
 jobs:
   build-gui:
     runs-on: ubuntu-22.04
+    timeout-minutes: 60
     outputs:
       gui-built: 'true'
 
@@ -29,11 +30,12 @@ jobs:
         run: npm ci
 
       - name: Fetch scratch-gui repository
+        timeout-minutes: 15
         run: |
           if [ -d scratch-gui ]; then
-            cd scratch-gui && git pull origin develop
+            cd scratch-gui && git pull origin develop || git clone -b develop --single-branch --depth 1 https://github.com/Bilup/scratch-gui.git scratch-gui-temp && rm -rf scratch-gui && mv scratch-gui-temp scratch-gui
           else
-            git clone -b develop --single-branch https://github.com/Bilup/scratch-gui.git
+            git clone -b develop --single-branch --depth 1 https://github.com/Bilup/scratch-gui.git
           fi
 
       - name: Cache scratch-gui dependencies
@@ -53,9 +55,11 @@ jobs:
 
       - name: Install scratch-gui dependencies (if cache miss)
         if: steps.scratch-gui-cache.outputs.cache-hit != 'true'
+        timeout-minutes: 15
         run: cd scratch-gui && bun install
 
       - name: Build scratch-gui
+        timeout-minutes: 20
         run: cd scratch-gui && bun run build
 
       - name: Sync Capacitor and copy web assets
@@ -73,6 +77,7 @@ jobs:
   build-apk-phone:
     needs: build-gui
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -154,6 +159,7 @@ jobs:
   build-apk-tablet:
     needs: build-gui
     runs-on: ubuntu-22.04
+    timeout-minutes: 45
 
     steps:
       - name: Checkout repository
@@ -235,6 +241,7 @@ jobs:
   publish-release:
     needs: [build-apk-phone, build-apk-tablet]
     runs-on: ubuntu-22.04
+    timeout-minutes: 15
 
     steps:
       - name: Checkout repository
