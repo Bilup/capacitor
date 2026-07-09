@@ -21,11 +21,13 @@ android {
             dimension "device"
             applicationIdSuffix ".phone"
             versionNameSuffix "-phone"
+            buildConfigField "String", "DEVICE_TYPE", "\"phone\""
         }
         tablet {
             dimension "device"
             applicationIdSuffix ".tablet"
             versionNameSuffix "-tablet"
+            buildConfigField "String", "DEVICE_TYPE", "\"tablet\""
         }
     }
     buildTypes {
