@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   build-gui:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-latest
     timeout-minutes: 60
     outputs:
       gui-built: 'true'
@@ -19,21 +19,29 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        timeout-minutes: 5
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'npm'
+        timeout-minutes: 5
 
       - name: Install dependencies
         run: npm ci
+        timeout-minutes: 10
 
       - name: Fetch scratch-gui repository
         timeout-minutes: 15
         run: |
           if [ -d scratch-gui ]; then
-            cd scratch-gui && git pull origin develop || git clone -b develop --single-branch --depth 1 https://github.com/Bilup/scratch-gui.git scratch-gui-temp && rm -rf scratch-gui && mv scratch-gui-temp scratch-gui
+            cd scratch-gui
+            if ! git pull origin develop; then
+              cd ..
+              rm -rf scratch-gui
+              git clone -b develop --single-branch --depth 1 https://github.com/Bilup/scratch-gui.git
+            fi
           else
             git clone -b develop --single-branch --depth 1 https://github.com/Bilup/scratch-gui.git
           fi
@@ -46,12 +54,14 @@ jobs:
           key: ${{ runner.os }}-scratch-gui-${{ hashFiles('scratch-gui/package-lock.json') }}
           restore-keys: |
             ${{ runner.os }}-scratch-gui-
+        timeout-minutes: 5
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
         with:
           bun-version: latest
           cache: true
+        timeout-minutes: 5
 
       - name: Install scratch-gui dependencies (if cache miss)
         if: steps.scratch-gui-cache.outputs.cache-hit != 'true'
@@ -63,6 +73,7 @@ jobs:
         run: cd scratch-gui && bun run build
 
       - name: Sync Capacitor and copy web assets
+        timeout-minutes: 10
         run: |
           npx cap copy
           npx cap sync android
@@ -73,24 +84,28 @@ jobs:
           name: android-project
           path: android/
           retention-days: 1
+        timeout-minutes: 5
 
-  build-apk-phone:
+  build-apk:
     needs: build-gui
-    runs-on: ubuntu-22.04
-    timeout-minutes: 45
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+        timeout-minutes: 5
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'npm'
+        timeout-minutes: 5
 
       - name: Install dependencies
         run: npm ci
+        timeout-minutes: 10
 
       - name: Setup Java JDK
         uses: actions/setup-java@v4
@@ -98,24 +113,30 @@ jobs:
           distribution: 'temurin'
           java-version: '21'
           cache: 'gradle'
+        timeout-minutes: 10
 
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
+        timeout-minutes: 15
 
       - name: Add Android SDK to PATH
         run: echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
+        timeout-minutes: 2
 
       - name: Download Android project
         uses: actions/download-artifact@v4
         with:
           name: android-project
           path: android/
+        timeout-minutes: 5
 
       - name: Create local.properties for Android SDK
         run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+        timeout-minutes: 2
 
       - name: Remove existing keystore if present
         run: rm -f android/app/release.keystore
+        timeout-minutes: 2
 
       - name: Generate PKCS12 Keystore
         run: |
@@ -126,6 +147,7 @@ jobs:
             -keypass ${{ secrets.KEY_PASSWORD }} \
             -dname "CN=Bilup, OU=Bilup, O=Bilup, L=Beijing, ST=Beijing, C=CN" \
             -storetype PKCS12
+        timeout-minutes: 5
 
       - name: Cache Gradle wrapper and dependencies
         uses: actions/cache@v4
@@ -136,18 +158,20 @@ jobs:
           key: ${{ runner.os }}-gradle-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties') }}
           restore-keys: |
             ${{ runner.os }}-gradle-
+        timeout-minutes: 5
 
-      - name: Build Android APK (Release - Phone)
+      - name: Build Android APKs (Release - Phone & Tablet)
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assemblePhoneRelease --no-daemon --parallel --build-cache -x test -x lint
+          ./gradlew assemblePhoneRelease assembleTabletRelease --no-daemon --parallel --build-cache -x test -x lint --console=plain --stacktrace
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           GRADLE_OPTS: "-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g"
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
+        timeout-minutes: 40
 
       - name: Upload Release APK (Phone)
         uses: actions/upload-artifact@v4
@@ -155,81 +179,7 @@ jobs:
           name: release-apk-phone
           path: android/app/build/outputs/apk/phone/release/*.apk
           retention-days: 30
-
-  build-apk-tablet:
-    needs: build-gui
-    runs-on: ubuntu-22.04
-    timeout-minutes: 45
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-
-      - name: Install dependencies
-        run: npm ci
-
-      - name: Setup Java JDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-          cache: 'gradle'
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-
-      - name: Add Android SDK to PATH
-        run: echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
-
-      - name: Download Android project
-        uses: actions/download-artifact@v4
-        with:
-          name: android-project
-          path: android/
-
-      - name: Create local.properties for Android SDK
-        run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
-
-      - name: Remove existing keystore if present
-        run: rm -f android/app/release.keystore
-
-      - name: Generate PKCS12 Keystore
-        run: |
-          keytool -genkeypair -v -keystore android/app/release.keystore \
-            -alias ${{ secrets.KEY_ALIAS }} \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass ${{ secrets.KEYSTORE_PASSWORD }} \
-            -keypass ${{ secrets.KEY_PASSWORD }} \
-            -dname "CN=Bilup, OU=Bilup, O=Bilup, L=Beijing, ST=Beijing, C=CN" \
-            -storetype PKCS12
-
-      - name: Cache Gradle wrapper and dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-
-      - name: Build Android APK (Release - Tablet)
-        run: |
-          cd android
-          chmod +x gradlew
-          ./gradlew assembleTabletRelease --no-daemon --parallel --build-cache -x test -x lint
-        env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          GRADLE_OPTS: "-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g"
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+        timeout-minutes: 5
 
       - name: Upload Release APK (Tablet)
         uses: actions/upload-artifact@v4
@@ -237,10 +187,11 @@ jobs:
           name: release-apk-tablet
           path: android/app/build/outputs/apk/tablet/release/*.apk
           retention-days: 30
+        timeout-minutes: 5
 
   publish-release:
-    needs: [build-apk-phone, build-apk-tablet]
-    runs-on: ubuntu-22.04
+    needs: build-apk
+    runs-on: ubuntu-latest
     timeout-minutes: 15
 
     steps:
@@ -248,33 +199,41 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+        timeout-minutes: 5
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: 24
+        timeout-minutes: 5
 
       - name: Download Phone APKs
         uses: actions/download-artifact@v4
         with:
           name: release-apk-phone
           path: ./apks/
+        timeout-minutes: 5
 
       - name: Download Tablet APKs
         uses: actions/download-artifact@v4
         with:
           name: release-apk-tablet
           path: ./apks/
+        timeout-minutes: 5
 
       - name: List APK files
         run: ls -la ./apks/
+        timeout-minutes: 2
 
       - name: Upload to GitHub Releases
-        shell: bash
         run: |
-          node scripts/upload-to-github-releases.mjs \
-            "${{ github.repository_owner }}" \
-            "${{ github.event.repository.name }}" \
-            "apks/**/*.apk"
+          TAG_NAME="${{ github.ref_name }}"
+          RELEASE_NAME="${TAG_NAME}"
+          
+          gh release create "${TAG_NAME}" \
+            --title "${RELEASE_NAME}" \
+            --notes "Automated release build" \
+            ./apks/*.apk
         env:
           GH_TOKEN: "${{ github.token }}"
+        timeout-minutes: 10
