@@ -68,6 +68,32 @@ jobs:
         timeout-minutes: 15
         run: cd scratch-gui && bun install
 
+      - name: Patch scratch-gui 'fractch' typo (temporary build fix)
+        # scratch-gui (Bilup fork, develop) has a typo importing a non-existent
+        # module 'fractch' from src/lib/git, which breaks the webpack build.
+        # This step removes the bad import line so the build can proceed.
+        # TODO: fix the spelling in github.com/Bilup/scratch-gui and remove this step.
+        continue-on-error: true
+        timeout-minutes: 5
+        run: |
+          DIR="scratch-gui/src/lib/git"
+          if [ -d "$DIR" ]; then
+            echo "Scanning $DIR for 'fractch' imports..."
+            matches=$(grep -rl "fractch" "$DIR" --include=*.js --include=*.jsx --include=*.ts --include=*.tsx 2>/dev/null || true)
+            if [ -n "$matches" ]; then
+              echo "Found 'fractch' references, removing import lines:"
+              echo "$matches"
+              for f in $matches; do
+                sed -i "/['\"]fractch['\"]/d" "$f"
+              done
+              echo "Patched."
+            else
+              echo "No 'fractch' references found, nothing to patch."
+            fi
+          else
+            echo "$DIR not present, skipping patch."
+          fi
+
       - name: Build scratch-gui
         timeout-minutes: 20
         run: cd scratch-gui && bun run build
