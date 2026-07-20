@@ -49,7 +49,7 @@ public class MainActivity extends BridgeActivity {
         if (isPhoneDevice()) {
             settings.setLoadWithOverviewMode(true);
             settings.setUseWideViewPort(true);
-            settings.setSupportZoom(false);
+            settings.setSupportZoom(true);
             settings.setBuiltInZoomControls(false);
             settings.setDisplayZoomControls(false);
         } else {
@@ -88,11 +88,11 @@ public class MainActivity extends BridgeActivity {
                 "initialScale = Math.max(initialScale, isLandscape ? 0.5 : 0.35);" +
                 "var viewport = document.querySelector('meta[name=viewport]');" +
                 "if (viewport) {" +
-                    "viewport.content = 'width=' + designWidth + ', initial-scale=' + initialScale + ', maximum-scale=1.0, user-scalable=no, viewport-fit=cover';" +
+                    "viewport.content = 'width=' + designWidth + ', initial-scale=' + initialScale + ', maximum-scale=3.0, minimum-scale=0.3, user-scalable=yes, viewport-fit=cover';" +
                 "} else {" +
                     "var meta = document.createElement('meta');" +
                     "meta.name = 'viewport';" +
-                    "meta.content = 'width=' + designWidth + ', initial-scale=' + initialScale + ', maximum-scale=1.0, user-scalable=no, viewport-fit=cover';" +
+                    "meta.content = 'width=' + designWidth + ', initial-scale=' + initialScale + ', maximum-scale=3.0, minimum-scale=0.3, user-scalable=yes, viewport-fit=cover';" +
                     "document.head.appendChild(meta);" +
                 "}" +
             "})();";
@@ -162,7 +162,7 @@ public class MainActivity extends BridgeActivity {
             "if (window.Capacitor) {" +
                 "var style = document.createElement('style');" +
                 "var mobileStyles = '" +
-                    "body { min-width: 1280px; overflow-x: auto; -webkit-tap-highlight-color: transparent; } " +
+                    "body { min-width: 1280px; overflow-x: auto; -webkit-tap-highlight-color: transparent; touch-action: pan-x pan-y pinch-zoom; } " +
                     "button, a { -webkit-tap-highlight-color: transparent; touch-action: manipulation; } " +
                     "input, textarea { font-size: 16px; } " +
                     "[class*=\"menuBar\"], [class*=\"menu-bar\"] { overflow-x: auto; -webkit-overflow-scrolling: touch; } " +
