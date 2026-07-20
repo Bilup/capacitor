@@ -1,5 +1,6 @@
 package org.bilup.app;
 
+import android.content.res.Configuration;
 import android.os.Bundle;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -23,8 +24,19 @@ public class MainActivity extends BridgeActivity {
             public void onPageLoaded(WebView webView) {
                 configureWebViewSettings(webView);
                 injectMobileRestrictions(webView);
+                injectOrientationStyles(webView);
             }
         });
+    }
+    
+    @Override
+    public void onConfigurationChanged(Configuration newConfig) {
+        super.onConfigurationChanged(newConfig);
+        WebView webView = getBridge().getWebView();
+        if (webView != null) {
+            injectViewportMeta(webView);
+            injectOrientationStyles(webView);
+        }
     }
     
     private boolean isPhoneDevice() {
@@ -66,13 +78,14 @@ public class MainActivity extends BridgeActivity {
         
         if (isPhoneDevice()) {
             jsCode = "(function() {" +
-                "var designWidth = 1280;" +
-                "var designHeight = 720;" +
+                "var isLandscape = window.innerWidth > window.innerHeight;" +
+                "var designWidth = isLandscape ? 1280 : 720;" +
+                "var designHeight = isLandscape ? 720 : 1280;" +
                 "var scaleX = window.innerWidth / designWidth;" +
                 "var scaleY = window.innerHeight / designHeight;" +
                 "var initialScale = Math.min(scaleX, scaleY);" +
-                "initialScale = Math.min(initialScale, 0.85);" +
-                "initialScale = Math.max(initialScale, 0.35);" +
+                "initialScale = Math.min(initialScale, isLandscape ? 0.95 : 0.85);" +
+                "initialScale = Math.max(initialScale, isLandscape ? 0.5 : 0.35);" +
                 "var viewport = document.querySelector('meta[name=viewport]');" +
                 "if (viewport) {" +
                     "viewport.content = 'width=' + designWidth + ', initial-scale=' + initialScale + ', maximum-scale=1.0, user-scalable=no, viewport-fit=cover';" +
@@ -85,9 +98,13 @@ public class MainActivity extends BridgeActivity {
             "})();";
         } else {
             jsCode = "(function() {" +
-                "var designWidth = 1280;" +
-                "var initialScale = Math.min(window.innerWidth / designWidth, 0.7);" +
-                "initialScale = Math.max(initialScale, 0.3);" +
+                "var isLandscape = window.innerWidth > window.innerHeight;" +
+                "var designWidth = isLandscape ? 1280 : 720;" +
+                "var scaleX = window.innerWidth / designWidth;" +
+                "var scaleY = window.innerHeight / 720;" +
+                "var initialScale = Math.min(scaleX, scaleY);" +
+                "initialScale = Math.min(initialScale, isLandscape ? 0.9 : 0.7);" +
+                "initialScale = Math.max(initialScale, isLandscape ? 0.4 : 0.3);" +
                 "var viewport = document.querySelector('meta[name=viewport]');" +
                 "if (viewport) {" +
                     "viewport.content = 'width=' + designWidth + ', initial-scale=' + initialScale + ', maximum-scale=2.0, user-scalable=yes';" +
@@ -99,6 +116,43 @@ public class MainActivity extends BridgeActivity {
                 "}" +
             "})();";
         }
+        
+        webView.evaluateJavascript(jsCode, null);
+    }
+    
+    private void injectOrientationStyles(WebView webView) {
+        String jsCode = "(function() {" +
+            "if (window.Capacitor) {" +
+                "var isLandscape = window.innerWidth > window.innerHeight;" +
+                "var existingStyle = document.getElementById('bilup-orientation-style');" +
+                "if (existingStyle) {" +
+                    "existingStyle.remove();" +
+                "}" +
+                "var style = document.createElement('style');" +
+                "style.id = 'bilup-orientation-style';" +
+                "var landscapeStyles = '" +
+                    "[class*=\"stage-header-wrapper\"], [class*=\"stage-header\"] { flex-direction: row; flex-wrap: nowrap; } " +
+                    "[class*=\"stage-selector\"], [class*=\"stage-select\"] { flex-shrink: 0; } " +
+                    "[class*=\"gui-wrapper\"], [class*=\"editor-wrapper\"] { flex-direction: row; } " +
+                    "[class*=\"blocks-wrapper\"], [class*=\"blocks-container\"] { width: 35%; min-width: 280px; max-width: 400px; } " +
+                    "[class*=\"stage-wrapper\"], [class*=\"stage-container\"] { width: 65%; } " +
+                    "[class*=\"menu-bar\"] { flex-wrap: nowrap; } " +
+                    "[class*=\"monitor-list\"], [class*=\"monitors\"] { max-height: 100%; overflow-y: auto; } " +
+                    "[class*=\"blockly-scrollbar\"] { width: 6px; }" +
+                "';" +
+                "var portraitStyles = '" +
+                    "[class*=\"stage-header-wrapper\"], [class*=\"stage-header\"] { flex-direction: column; } " +
+                    "[class*=\"gui-wrapper\"], [class*=\"editor-wrapper\"] { flex-direction: column; } " +
+                    "[class*=\"blocks-wrapper\"], [class*=\"blocks-container\"] { width: 100%; max-height: 55vh; overflow-y: auto; } " +
+                    "[class*=\"stage-wrapper\"], [class*=\"stage-container\"] { width: 100%; min-height: 35vh; } " +
+                    "[class*=\"menu-bar\"] { flex-wrap: wrap; } " +
+                    "[class*=\"monitor-list\"], [class*=\"monitors\"] { max-height: 200px; } " +
+                    "[class*=\"blockly-scrollbar\"] { width: 4px; }" +
+                "';" +
+                "style.textContent = isLandscape ? landscapeStyles : portraitStyles;" +
+                "document.head.appendChild(style);" +
+            "}" +
+        "})();";
         
         webView.evaluateJavascript(jsCode, null);
     }
