@@ -87,7 +87,7 @@ public final class WebViewEnhancer {
             "function hasSubmenu(item) {" +
                 "for (var c = item.firstElementChild; c; c = c.nextElementSibling) {" +
                     "var cn = c.className;" +
-                    "if (typeof cn === 'string' && (cn.indexOf('menu') !== -1 || cn.indexOf('Menu') !== -1 || cn.indexOf('dropdown') !== -1 || cn.indexOf('Dropdown') !== -1)) {" +
+                    "if (typeof cn === 'string' && (cn.indexOf('dropdown') !== -1 || cn.indexOf('Dropdown') !== -1 || cn.indexOf('submenu') !== -1 || cn.indexOf('Submenu') !== -1)) {" +
                         "return true;" +
                     "}" +
                 "}" +
