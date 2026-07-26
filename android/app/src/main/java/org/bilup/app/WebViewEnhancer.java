@@ -84,6 +84,15 @@ public final class WebViewEnhancer {
             "});" +
 
             /* ========== 菜单栏触摸事件增强 ========== */
+            "function hasSubmenu(item) {" +
+                "for (var c = item.firstElementChild; c; c = c.nextElementSibling) {" +
+                    "var cn = c.className;" +
+                    "if (typeof cn === 'string' && (cn.indexOf('menu') !== -1 || cn.indexOf('Menu') !== -1 || cn.indexOf('dropdown') !== -1 || cn.indexOf('Dropdown') !== -1)) {" +
+                        "return true;" +
+                    "}" +
+                "}" +
+                "return false;" +
+            "}" +
             "function enhanceMenuBar() {" +
                 "var menuBars = document.querySelectorAll('[class*=\"menuBar\"], [class*=\"menu-bar\"]');" +
                 "menuBars.forEach(function(bar) {" +
@@ -92,34 +101,21 @@ public final class WebViewEnhancer {
                     "var items = bar.querySelectorAll('[class*=\"menu-item\"], [class*=\"menuItem\"], li, [role=\"menuitem\"]');" +
                     "items.forEach(function(item) {" +
                         "item.addEventListener('touchstart', function(e) {" +
-                            /* 阻止浏览器默认行为，防止触发页面滚动或双击缩放 */
-                            "e.preventDefault();" +
+                            "if (hasSubmenu(this)) {" +
+                                "e.preventDefault();" +
+                            "}" +
                         "}, { passive: false });" +
                         "item.addEventListener('touchend', function(e) {" +
-                            "var touch = e.changedTouches[0];" +
-                            /* 判断当前项是否包含子菜单（下拉菜单容器） */
-                            "var hasSubmenu = false;" +
-                            "for (var c = this.firstElementChild; c; c = c.nextElementSibling) {" +
-                                "if (c.className && (c.className.indexOf('menu') !== -1 || c.className.indexOf('Menu') !== -1 || c.className.indexOf('dropdown') !== -1 || c.className.indexOf('Dropdown') !== -1)) {" +
-                                    "hasSubmenu = true; break;" +
-                                "}" +
-                            "}" +
-                            "if (hasSubmenu) {" +
-                                /* 顶级菜单项：只派发 mouseenter 打开下拉菜单，不派发 click */
+                            "if (hasSubmenu(this)) {" +
+                                "var touch = e.changedTouches[0];" +
                                 "var enterEvent = new MouseEvent('mouseenter', {" +
                                     "bubbles: true, cancelable: true, " +
                                     "clientX: touch.clientX, clientY: touch.clientY" +
                                 "});" +
                                 "this.dispatchEvent(enterEvent);" +
                                 "e.preventDefault();" +
-                            "} else {" +
-                                /* 叶子菜单项：派发 click 触发操作 */ 
-                                "var clickEvent = new MouseEvent('click', {" +
-                                    "bubbles: true, cancelable: true, " +
-                                    "clientX: touch.clientX, clientY: touch.clientY" +
-                                "});" +
-                                "this.dispatchEvent(clickEvent);" +
                             "}" +
+                            /* 叶子菜单项：不做任何干预，让浏览器原生 touch→click 以 isTrusted=true 触发 */
                         "}, { passive: false });" +
                     "});" +
                 "});" +
@@ -129,25 +125,53 @@ public final class WebViewEnhancer {
             "observer.observe(document.body, { childList: true, subtree: true });" +
 
             /* ========== Blob 下载拦截 ========== */
+            /* 拦截 URL.createObjectURL 以缓存 Blob 引用，防止 revokeObjectURL 后 fetch 失败 */
+            "if (!window._bilupBlobMap) {" +
+                "window._bilupBlobMap = {};" +
+                "var _origCreate = URL.createObjectURL;" +
+                "URL.createObjectURL = function(blob) {" +
+                    "var url = _origCreate.call(URL, blob);" +
+                    "window._bilupBlobMap[url] = blob;" +
+                    "return url;" +
+                "};" +
+                "var _origRevoke = URL.revokeObjectURL;" +
+                "URL.revokeObjectURL = function(url) {" +
+                    "delete window._bilupBlobMap[url];" +
+                    "_origRevoke.call(URL, url);" +
+                "};" +
+            "}" +
             "document.addEventListener('click', function(e) {" +
                 "var link = e.target.closest('a');" +
                 "if (link && link.href && link.href.indexOf('blob:') === 0) {" +
                     "e.preventDefault(); e.stopPropagation();" +
                     "var fileName = link.download || 'Bilup_project_' + Date.now() + '.sb3';" +
-                    "var mimeType = '';" +
-                    "fetch(link.href).then(function(r) {" +
-                        "mimeType = r.headers.get('Content-Type') || r.type || 'application/octet-stream';" +
-                        "return r.blob();" +
-                    "}).then(function(b) {" +
+                    "var cachedBlob = window._bilupBlobMap[link.href];" +
+                    "if (cachedBlob) {" +
                         "var reader = new FileReader();" +
                         "reader.onloadend = function() {" +
                             "var base64 = reader.result.split(',')[1];" +
-                            "try { BilupFileBridge.saveBlob(base64, fileName, mimeType); }" +
+                            "try { BilupFileBridge.saveBlob(base64, fileName, cachedBlob.type || 'application/octet-stream'); }" +
                             "catch(err) { console.error('BilupFileBridge err:', err); }" +
                         "};" +
                         "reader.onerror = function() { console.error('FileReader failed'); };" +
-                        "reader.readAsDataURL(b);" +
-                    "}).catch(function(err) { console.error('Blob fetch err:', err); });" +
+                        "reader.readAsDataURL(cachedBlob);" +
+                    "} else {" +
+                        /* 降级：通过 fetch 获取 blob */
+                        "var mimeType = '';" +
+                        "fetch(link.href).then(function(r) {" +
+                            "mimeType = r.headers.get('Content-Type') || r.type || 'application/octet-stream';" +
+                            "return r.blob();" +
+                        "}).then(function(b) {" +
+                            "var reader = new FileReader();" +
+                            "reader.onloadend = function() {" +
+                                "var base64 = reader.result.split(',')[1];" +
+                                "try { BilupFileBridge.saveBlob(base64, fileName, mimeType); }" +
+                                "catch(err) { console.error('BilupFileBridge err:', err); }" +
+                            "};" +
+                            "reader.onerror = function() { console.error('FileReader failed'); };" +
+                            "reader.readAsDataURL(b);" +
+                        "}).catch(function(err) { console.error('Blob fetch err:', err); });" +
+                    "}" +
                 "}" +
             "}, true);" +
         "})();";

@@ -13,6 +13,7 @@ import android.widget.Toast;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.OutputStream;
 
 /**
@@ -66,13 +67,14 @@ public class BlobReceiver {
 
         if (uri != null) {
             try (OutputStream out = resolver.openOutputStream(uri)) {
-                if (out != null) {
-                    out.write(data);
+                if (out == null) {
+                    throw new IOException("无法打开输出流，URI: " + uri);
                 }
+                out.write(data);
             }
-            values.clear();
-            values.put(MediaStore.Downloads.IS_PENDING, 0);
-            resolver.update(uri, values, null, null);
+            ContentValues updateValues = new ContentValues();
+            updateValues.put(MediaStore.Downloads.IS_PENDING, 0);
+            resolver.update(uri, updateValues, null, null);
             return "下载/Bilup";
         }
         return saveViaFileSystem(data, fileName);

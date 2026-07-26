@@ -13,6 +13,7 @@ import android.webkit.URLUtil;
 import android.webkit.WebView;
 import android.widget.Toast;
 
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -57,7 +58,7 @@ public class FileDownloadHelper {
     }
 
     /**
-     * 处理 blob: 协议的 URL：让 JS fetch 获取数据，通过 BilupFileBridge 回传保存
+     * 处理 blob: 协议的 URL：优先使用 JS 侧缓存的 Blob 引用，降级到 fetch
      */
     private void handleBlobDownload(String blobUrl, String fileName, String mimeType) {
         String safeUrl = blobUrl.replace("'", "\\'");
@@ -66,16 +67,22 @@ public class FileDownloadHelper {
 
         String js = "(function() {" +
             "var url = '" + safeUrl + "';" +
-            "fetch(url).then(function(r) { return r.blob(); }).then(function(b) {" +
+            "var cached = (window._bilupBlobMap && window._bilupBlobMap[url]);" +
+            "function saveBlob(b) {" +
                 "var reader = new FileReader();" +
                 "reader.onloadend = function() {" +
                     "var base64 = reader.result.split(',')[1];" +
                     "try { BilupFileBridge.saveBlob(base64, '" + safeName + "', '" + safeMime + "'); }" +
                     "catch(e) { console.error('BilupFileBridge error:', e); }" +
                 "};" +
-                "reader.onerror = function() { console.error('FileReader failed for blob:', url); };" +
                 "reader.readAsDataURL(b);" +
-            "}).catch(function(e) { console.error('Fetch blob failed:', e); });" +
+            "}" +
+            "if (cached) { saveBlob(cached); }" +
+            "else {" +
+                "fetch(url).then(function(r) { return r.blob(); })" +
+                ".then(function(b) { saveBlob(b); })" +
+                ".catch(function(e) { console.error('Fetch blob failed:', e); });" +
+            "}" +
         "})();";
 
         webView.evaluateJavascript(js, null);
@@ -102,6 +109,7 @@ public class FileDownloadHelper {
         values.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
         values.put(MediaStore.Downloads.MIME_TYPE, mimeType != null ? mimeType : "application/octet-stream");
         values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + "/Bilup");
+        values.put(MediaStore.Downloads.IS_PENDING, 1);
 
         ContentResolver resolver = context.getContentResolver();
         Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
@@ -117,16 +125,21 @@ public class FileDownloadHelper {
 
                 try (InputStream input = conn.getInputStream();
                      OutputStream output = resolver.openOutputStream(uri)) {
-                    if (output != null) {
-                        byte[] buffer = new byte[8192];
-                        int len;
-                        while ((len = input.read(buffer)) != -1) {
-                            output.write(buffer, 0, len);
-                        }
+                    if (output == null) {
+                        throw new IOException("无法打开输出流，URI: " + uri);
+                    }
+                    byte[] buffer = new byte[8192];
+                    int len;
+                    while ((len = input.read(buffer)) != -1) {
+                        output.write(buffer, 0, len);
                     }
                 } finally {
                     conn.disconnect();
                 }
+
+                ContentValues updateValues = new ContentValues();
+                updateValues.put(MediaStore.Downloads.IS_PENDING, 0);
+                resolver.update(uri, updateValues, null, null);
 
                 Toast.makeText(context, "文件已保存至 下载/Bilup/" + fileName, Toast.LENGTH_LONG).show();
             } else {
