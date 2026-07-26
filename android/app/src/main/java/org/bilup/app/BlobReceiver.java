@@ -34,24 +34,24 @@ public class BlobReceiver {
     public void saveBlob(String base64Data, String fileName, String mimeType) {
         try {
             byte[] data = Base64.decode(base64Data, Base64.DEFAULT);
-            saveBytesToFile(data, fileName, mimeType);
-            showToast("已保存: " + fileName);
+            String savePath = saveBytesToFile(data, fileName, mimeType);
+            showToast("文件已保存至 " + savePath + "/" + fileName);
         } catch (Exception e) {
             showToast("文件保存失败: " + e.getMessage());
         }
     }
 
-    private void saveBytesToFile(byte[] data, String fileName, String mimeType) throws Exception {
+    private String saveBytesToFile(byte[] data, String fileName, String mimeType) throws Exception {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             // Android 10+ — MediaStore
-            saveViaMediaStore(data, fileName, mimeType);
+            return saveViaMediaStore(data, fileName, mimeType);
         } else {
             // Android 9 及以下 — 直接写入文件
-            saveViaFileSystem(data, fileName);
+            return saveViaFileSystem(data, fileName);
         }
     }
 
-    private void saveViaMediaStore(byte[] data, String fileName, String mimeType) throws Exception {
+    private String saveViaMediaStore(byte[] data, String fileName, String mimeType) throws Exception {
         ContentValues values = new ContentValues();
         values.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
         values.put(MediaStore.Downloads.MIME_TYPE, mimeType != null ? mimeType : "application/octet-stream");
@@ -73,10 +73,12 @@ public class BlobReceiver {
             values.clear();
             values.put(MediaStore.Downloads.IS_PENDING, 0);
             resolver.update(uri, values, null, null);
+            return "下载/Bilup";
         }
+        return saveViaFileSystem(data, fileName);
     }
 
-    private void saveViaFileSystem(byte[] data, String fileName) throws Exception {
+    private String saveViaFileSystem(byte[] data, String fileName) throws Exception {
         File dir = new File(
                 Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Bilup");
         if (!dir.exists()) {
@@ -86,6 +88,7 @@ public class BlobReceiver {
         try (FileOutputStream fos = new FileOutputStream(file)) {
             fos.write(data);
         }
+        return dir.getAbsolutePath();
     }
 
     private void showToast(final String message) {
@@ -94,7 +97,7 @@ public class BlobReceiver {
             ((android.app.Activity) context).runOnUiThread(new Runnable() {
                 @Override
                 public void run() {
-                    Toast.makeText(context, message, Toast.LENGTH_SHORT).show();
+                    Toast.makeText(context, message, Toast.LENGTH_LONG).show();
                 }
             });
         }

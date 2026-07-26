@@ -109,29 +109,29 @@ public class FileDownloadHelper {
             uri = resolver.insert(MediaStore.Files.getContentUri("external"), values);
         }
 
-        if (uri != null) {
-            URL url = new URL(fileUrl);
-            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-            conn.setInstanceFollowRedirects(true);
-            conn.connect();
+            if (uri != null) {
+                URL url = new URL(fileUrl);
+                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+                conn.setInstanceFollowRedirects(true);
+                conn.connect();
 
-            try (InputStream input = conn.getInputStream();
-                 OutputStream output = resolver.openOutputStream(uri)) {
-                if (output != null) {
-                    byte[] buffer = new byte[8192];
-                    int len;
-                    while ((len = input.read(buffer)) != -1) {
-                        output.write(buffer, 0, len);
+                try (InputStream input = conn.getInputStream();
+                     OutputStream output = resolver.openOutputStream(uri)) {
+                    if (output != null) {
+                        byte[] buffer = new byte[8192];
+                        int len;
+                        while ((len = input.read(buffer)) != -1) {
+                            output.write(buffer, 0, len);
+                        }
                     }
+                } finally {
+                    conn.disconnect();
                 }
-            } finally {
-                conn.disconnect();
-            }
 
-            Toast.makeText(context, "已保存: " + fileName, Toast.LENGTH_SHORT).show();
-        } else {
-            saveFileWithDownloadManager(fileUrl, fileName, mimeType);
-        }
+                Toast.makeText(context, "文件已保存至 下载/Bilup/" + fileName, Toast.LENGTH_LONG).show();
+            } else {
+                saveFileWithDownloadManager(fileUrl, fileName, mimeType);
+            }
     }
 
     private void saveFileWithDownloadManager(String fileUrl, String fileName, String mimeType) {
@@ -148,7 +148,7 @@ public class FileDownloadHelper {
             DownloadManager dm = (DownloadManager) context.getSystemService(Context.DOWNLOAD_SERVICE);
             if (dm != null) {
                 dm.enqueue(request);
-                Toast.makeText(context, "正在保存: " + fileName, Toast.LENGTH_SHORT).show();
+                Toast.makeText(context, "文件已保存至 下载/Bilup/" + fileName, Toast.LENGTH_LONG).show();
             }
         } catch (Exception e) {
             Toast.makeText(context,

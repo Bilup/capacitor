@@ -61,12 +61,9 @@ public final class WebViewEnhancer {
                 "body { overflow-x: hidden; -webkit-tap-highlight-color: transparent; } " +
                 "input, textarea { font-size: 16px; } " +
                 "[class*=\"menuBar\"], [class*=\"menu-bar\"] { " +
-                    "overflow-x: auto; overflow-y: hidden; " +
-                    "-webkit-overflow-scrolling: touch; " +
-                    "scroll-behavior: smooth; " +
+                    "overflow: visible; " +
                     "-ms-overflow-style: none; scrollbar-width: none; " +
                 "} " +
-                "[class*=\"menuBar\"]::-webkit-scrollbar, [class*=\"menu-bar\"]::-webkit-scrollbar { display: none; } " +
                 "::-webkit-scrollbar { width: 4px; height: 4px; } " +
                 "::-webkit-scrollbar-track { background: transparent; } " +
                 "::-webkit-scrollbar-thumb { background: rgba(0,0,0,0.2); border-radius: 2px; }" +
@@ -94,19 +91,36 @@ public final class WebViewEnhancer {
                     "bar.dataset.bilupEnhanced = 'true';" +
                     "var items = bar.querySelectorAll('[class*=\"menu-item\"], [class*=\"menuItem\"], li, [role=\"menuitem\"]');" +
                     "items.forEach(function(item) {" +
+                        "item.addEventListener('touchstart', function(e) {" +
+                            /* 阻止浏览器默认行为，防止触发页面滚动或双击缩放 */
+                            "e.preventDefault();" +
+                        "}, { passive: false });" +
                         "item.addEventListener('touchend', function(e) {" +
                             "var touch = e.changedTouches[0];" +
-                            "var enterEvent = new MouseEvent('mouseenter', {" +
-                                "bubbles: true, cancelable: true, " +
-                                "clientX: touch.clientX, clientY: touch.clientY" +
-                            "});" +
-                            "this.dispatchEvent(enterEvent);" +
-                            "var clickEvent = new MouseEvent('click', {" +
-                                "bubbles: true, cancelable: true, " +
-                                "clientX: touch.clientX, clientY: touch.clientY" +
-                            "});" +
-                            "this.dispatchEvent(clickEvent);" +
-                        "}, { passive: true });" +
+                            /* 判断当前项是否包含子菜单（下拉菜单容器） */
+                            "var hasSubmenu = false;" +
+                            "for (var c = this.firstElementChild; c; c = c.nextElementSibling) {" +
+                                "if (c.className && (c.className.indexOf('menu') !== -1 || c.className.indexOf('Menu') !== -1 || c.className.indexOf('dropdown') !== -1 || c.className.indexOf('Dropdown') !== -1)) {" +
+                                    "hasSubmenu = true; break;" +
+                                "}" +
+                            "}" +
+                            "if (hasSubmenu) {" +
+                                /* 顶级菜单项：只派发 mouseenter 打开下拉菜单，不派发 click */
+                                "var enterEvent = new MouseEvent('mouseenter', {" +
+                                    "bubbles: true, cancelable: true, " +
+                                    "clientX: touch.clientX, clientY: touch.clientY" +
+                                "});" +
+                                "this.dispatchEvent(enterEvent);" +
+                                "e.preventDefault();" +
+                            "} else {" +
+                                /* 叶子菜单项：派发 click 触发操作 */ 
+                                "var clickEvent = new MouseEvent('click', {" +
+                                    "bubbles: true, cancelable: true, " +
+                                    "clientX: touch.clientX, clientY: touch.clientY" +
+                                "});" +
+                                "this.dispatchEvent(clickEvent);" +
+                            "}" +
+                        "}, { passive: false });" +
                     "});" +
                 "});" +
             "}" +
