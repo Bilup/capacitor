@@ -306,24 +306,3 @@ jobs:
           path: staged-tablet/*.apk
           retention-days: 14
         timeout-minutes: 5
-
-  upload-debug-summary:
-    needs: [build-phone-debug, build-tablet-debug]
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    if: always()
-
-    steps:
-      - name: Summarize uploaded debug APKs
-        run: |
-          echo "## Debug APK Build Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Flavor | ABI | Artifact Name |" >> $GITHUB_STEP_SUMMARY
-          echo "|--------|-----|---------------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Phone | x86 | Bilup-android-phone-debug-x86 |" >> $GITHUB_STEP_SUMMARY
-          echo "| Phone | x86_64 | Bilup-android-phone-debug-x86_64 |" >> $GITHUB_STEP_SUMMARY
-          echo "| Phone | arm64 | Bilup-android-phone-debug-arm |" >> $GITHUB_STEP_SUMMARY
-          echo "| Tablet | x86 | Bilup-android-tablet-debug-x86 |" >> $GITHUB_STEP_SUMMARY
-          echo "| Tablet | x86_64 | Bilup-android-tablet-debug-x86_64 |" >> $GITHUB_STEP_SUMMARY
-          echo "| Tablet | arm64 | Bilup-android-tablet-debug-arm |" >> $GITHUB_STEP_SUMMARY
-        timeout-minutes: 2
