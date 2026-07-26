@@ -1,10 +1,20 @@
 apply plugin: 'com.android.application'
 apply from: '../signing.gradle'
 
-// Read version from version.json
-def jsonFile = file('../scripts/version.json')
-def versionJson = new groovy.json.JsonSlurper().parseText(jsonFile.text)
-def appVersion = versionJson.version
+// Read version from version.json (with fallback for CI environments)
+def appVersion = "1.0.0"
+try {
+    def versionFile = rootProject.file('scripts/version.json')
+    if (versionFile.exists()) {
+        def versionJson = new groovy.json.JsonSlurper().parseText(versionFile.text)
+        appVersion = versionJson.version
+        logger.lifecycle("Using version from scripts/version.json: ${appVersion}")
+    } else {
+        logger.warn("scripts/version.json not found, using default version: ${appVersion}")
+    }
+} catch(Exception e) {
+    logger.warn("Could not read version.json, using default version: ${appVersion} - ${e.message}")
+}
 
 android {
     namespace = "org.bilup.app"
