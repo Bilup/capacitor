@@ -86,7 +86,9 @@ jobs:
           retention-days: 1
         timeout-minutes: 5
 
-  build-apk:
+  # --- build-apk is now split into 4 jobs ---
+
+  build-phone-release:
     needs: build-gui
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -165,11 +167,11 @@ jobs:
             ${{ runner.os }}-gradle-
         timeout-minutes: 5
 
-      - name: Build Android APKs (Release - Phone & Tablet)
+      - name: Build Phone Release APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assemblePhoneRelease assembleTabletRelease --no-daemon --parallel --build-cache -x test -x lint --console=plain --stacktrace
+          ./gradlew assemblePhoneRelease --no-daemon --parallel --build-cache -x test -x lint --console=plain --stacktrace
         env:
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
@@ -178,7 +180,7 @@ jobs:
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
         timeout-minutes: 40
 
-      - name: Upload Release APK (Phone)
+      - name: Upload Phone Release APK
         uses: actions/upload-artifact@v4
         with:
           name: release-apk-phone
@@ -186,7 +188,99 @@ jobs:
           retention-days: 30
         timeout-minutes: 5
 
-      - name: Upload Release APK (Tablet)
+  build-tablet-release:
+    needs: build-gui
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        timeout-minutes: 5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+        timeout-minutes: 5
+
+      - name: Install dependencies
+        run: npm ci
+        timeout-minutes: 10
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+        timeout-minutes: 10
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "build-tools;35.0.0 platforms;android-35"
+        timeout-minutes: 15
+
+      - name: Add Android SDK to PATH
+        run: |
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/build-tools/35.0.0" >> $GITHUB_PATH
+        timeout-minutes: 2
+
+      - name: Download Android project
+        uses: actions/download-artifact@v4
+        with:
+          name: android-project
+          path: android/
+        timeout-minutes: 5
+
+      - name: Create local.properties for Android SDK
+        run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+        timeout-minutes: 2
+
+      - name: Remove existing keystore if present
+        run: rm -f android/app/release.keystore
+        timeout-minutes: 2
+
+      - name: Generate PKCS12 Keystore
+        run: |
+          keytool -genkeypair -v -keystore android/app/release.keystore \
+            -alias ${{ secrets.KEY_ALIAS }} \
+            -keyalg RSA -keysize 2048 -validity 10000 \
+            -storepass ${{ secrets.KEYSTORE_PASSWORD }} \
+            -keypass ${{ secrets.KEY_PASSWORD }} \
+            -dname "CN=Bilup, OU=Bilup, O=Bilup, L=Beijing, ST=Beijing, C=CN" \
+            -storetype PKCS12
+        timeout-minutes: 5
+
+      - name: Cache Gradle wrapper and dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+        timeout-minutes: 5
+
+      - name: Build Tablet Release APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleTabletRelease --no-daemon --parallel --build-cache -x test -x lint --console=plain --stacktrace
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          GRADLE_OPTS: "-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g"
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+        timeout-minutes: 40
+
+      - name: Upload Tablet Release APK
         uses: actions/upload-artifact@v4
         with:
           name: release-apk-tablet
@@ -195,7 +289,7 @@ jobs:
         timeout-minutes: 5
 
   publish-release:
-    needs: build-apk
+    needs: [build-phone-release, build-tablet-release]
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -234,7 +328,7 @@ jobs:
         run: |
           TAG_NAME="${{ github.ref_name }}"
           RELEASE_NAME="${TAG_NAME}"
-          
+
           gh release create "${TAG_NAME}" \
             --title "${RELEASE_NAME}" \
             --notes "Automated release build" \

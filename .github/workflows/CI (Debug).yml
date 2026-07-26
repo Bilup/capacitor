@@ -9,7 +9,8 @@ on:
       - main
   workflow_dispatch:
 
-
+permissions:
+  contents: read
 
 jobs:
   build-gui:
@@ -88,7 +89,9 @@ jobs:
           retention-days: 1
         timeout-minutes: 5
 
-  build-apk:
+  # --- build-apk is now split into 4 jobs ---
+
+  build-phone-debug:
     needs: build-gui
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -152,53 +155,175 @@ jobs:
             ${{ runner.os }}-gradle-
         timeout-minutes: 5
 
-      - name: Build Android APKs (Debug - Phone & Tablet)
+      - name: Build Phone Debug APK
         run: |
           cd android
           chmod +x gradlew
-          ./gradlew assemblePhoneDebug assembleTabletDebug --no-daemon --parallel --build-cache -x test -x lint --console=plain --stacktrace
+          ./gradlew assemblePhoneDebug --no-daemon --parallel --build-cache -x test -x lint --console=plain --stacktrace
         env:
           GRADLE_OPTS: "-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g"
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
         timeout-minutes: 40
 
-      - name: Upload Debug APKs
+      - name: Copy and stage Phone APKs
         run: |
-          for apk in android/app/build/outputs/apk/**/debug/*.apk; do
+          mkdir -p staged-phone
+          for apk in android/app/build/outputs/apk/phone/debug/*.apk; do
             filename=$(basename "$apk")
-            echo "Uploading $filename"
-            cp "$apk" "$filename"
+            cp "$apk" "staged-phone/$filename"
           done
-        timeout-minutes: 5
+        timeout-minutes: 2
 
-      - name: Upload Phone x86 Debug APK
+      - name: Upload Phone APK (x86)
         uses: actions/upload-artifact@v4
         with:
           name: Bilup-android-phone-debug-x86
-          path: Bilup-android-phone-*-x86.apk
+          path: staged-phone/*x86.apk
           retention-days: 14
         timeout-minutes: 5
 
-      - name: Upload Phone x86_64 Debug APK
+      - name: Upload Phone APK (x86_64)
         uses: actions/upload-artifact@v4
         with:
           name: Bilup-android-phone-debug-x86_64
-          path: Bilup-android-phone-*-64.apk
+          path: staged-phone/*64.apk
           retention-days: 14
         timeout-minutes: 5
 
-      - name: Upload Tablet x86 Debug APK
+      - name: Upload Phone APK (all remaining - arm64)
+        uses: actions/upload-artifact@v4
+        if: hashFiles('staged-phone/*.apk') != ''
+        with:
+          name: Bilup-android-phone-debug-arm
+          path: staged-phone/*.apk
+          retention-days: 14
+        timeout-minutes: 5
+
+  build-tablet-debug:
+    needs: build-gui
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        timeout-minutes: 5
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+        timeout-minutes: 5
+
+      - name: Install dependencies
+        run: npm ci
+        timeout-minutes: 10
+
+      - name: Setup Java JDK
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+          cache: 'gradle'
+        timeout-minutes: 10
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: "build-tools;35.0.0 platforms;android-35"
+        timeout-minutes: 15
+
+      - name: Add Android SDK to PATH
+        run: |
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/build-tools/35.0.0" >> $GITHUB_PATH
+        timeout-minutes: 2
+
+      - name: Download Android project
+        uses: actions/download-artifact@v4
+        with:
+          name: android-project
+          path: android/
+        timeout-minutes: 5
+
+      - name: Create local.properties for Android SDK
+        run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
+        timeout-minutes: 2
+
+      - name: Cache Gradle wrapper and dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.gradle/caches
+            ~/.gradle/wrapper
+          key: ${{ runner.os }}-gradle-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties') }}
+          restore-keys: |
+            ${{ runner.os }}-gradle-
+        timeout-minutes: 5
+
+      - name: Build Tablet Debug APK
+        run: |
+          cd android
+          chmod +x gradlew
+          ./gradlew assembleTabletDebug --no-daemon --parallel --build-cache -x test -x lint --console=plain --stacktrace
+        env:
+          GRADLE_OPTS: "-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g"
+          ANDROID_HOME: ${{ env.ANDROID_HOME }}
+        timeout-minutes: 40
+
+      - name: Copy and stage Tablet APKs
+        run: |
+          mkdir -p staged-tablet
+          for apk in android/app/build/outputs/apk/tablet/debug/*.apk; do
+            filename=$(basename "$apk")
+            cp "$apk" "staged-tablet/$filename"
+          done
+        timeout-minutes: 2
+
+      - name: Upload Tablet APK (x86)
         uses: actions/upload-artifact@v4
         with:
           name: Bilup-android-tablet-debug-x86
-          path: Bilup-android-tablet-*-x86.apk
+          path: staged-tablet/*x86.apk
           retention-days: 14
         timeout-minutes: 5
 
-      - name: Upload Tablet x86_64 Debug APK
+      - name: Upload Tablet APK (x86_64)
         uses: actions/upload-artifact@v4
         with:
           name: Bilup-android-tablet-debug-x86_64
-          path: Bilup-android-tablet-*-64.apk
+          path: staged-tablet/*64.apk
           retention-days: 14
         timeout-minutes: 5
+
+      - name: Upload Tablet APK (all remaining - arm64)
+        uses: actions/upload-artifact@v4
+        if: hashFiles('staged-tablet/*.apk') != ''
+        with:
+          name: Bilup-android-tablet-debug-arm
+          path: staged-tablet/*.apk
+          retention-days: 14
+        timeout-minutes: 5
+
+  upload-debug-summary:
+    needs: [build-phone-debug, build-tablet-debug]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    if: always()
+
+    steps:
+      - name: Summarize uploaded debug APKs
+        run: |
+          echo "## Debug APK Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Flavor | ABI | Artifact Name |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-----|---------------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Phone | x86 | Bilup-android-phone-debug-x86 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Phone | x86_64 | Bilup-android-phone-debug-x86_64 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Phone | arm64 | Bilup-android-phone-debug-arm |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tablet | x86 | Bilup-android-tablet-debug-x86 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tablet | x86_64 | Bilup-android-tablet-debug-x86_64 |" >> $GITHUB_STEP_SUMMARY
+          echo "| Tablet | arm64 | Bilup-android-tablet-debug-arm |" >> $GITHUB_STEP_SUMMARY
+        timeout-minutes: 2

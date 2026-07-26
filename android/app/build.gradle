@@ -1,6 +1,11 @@
 apply plugin: 'com.android.application'
 apply from: '../signing.gradle'
 
+// Read version from version.json
+def jsonFile = file('../scripts/version.json')
+def versionJson = new groovy.json.JsonSlurper().parseText(jsonFile.text)
+def appVersion = versionJson.version
+
 android {
     namespace = "org.bilup.app"
     compileSdk = rootProject.ext.compileSdkVersion
@@ -12,7 +17,7 @@ android {
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
-        versionName "1.4"
+        versionName appVersion
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
