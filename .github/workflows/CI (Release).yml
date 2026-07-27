@@ -223,7 +223,6 @@ jobs:
       - name: Build Release APK
         env:
           FLAVOR: ${{ matrix.flavor }}
-          ABI: ${{ matrix.abi }}
           MIN_SDK: ${{ matrix.minSdk }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
@@ -233,14 +232,9 @@ jobs:
         run: |
           cd android
           chmod +x gradlew
-          if [ "$ABI" = "x86" ]; then
-            ABI_TASK="X86"
-          else
-            ABI_TASK="X86_64"
-          fi
-          # Capitalize first letter of flavor for Gradle task name (phone→Phone, tablet→Tablet)
+          # Capitalize first letter of flavor (phone→Phone, tablet→Tablet)
           FLAVOR_CAP="$(echo "${FLAVOR:0:1}" | tr '[:lower:]' '[:upper:]')${FLAVOR:1}"
-          GRADLE_CMD="assemble${FLAVOR_CAP}${ABI_TASK}Release"
+          GRADLE_CMD="assemble${FLAVOR_CAP}Release"
           echo "============================================"
           echo "Building: $GRADLE_CMD (minSdk=$MIN_SDK)"
           echo "============================================"
@@ -249,11 +243,29 @@ jobs:
             --console=plain --stacktrace
         timeout-minutes: 40
 
+      - name: Stage APK by ABI
+        env:
+          FLAVOR: ${{ matrix.flavor }}
+          ABI: ${{ matrix.abi }}
+        run: |
+          mkdir -p staged
+          if [ "$ABI" = "x86_64" ]; then
+            ABI_PATTERN="*64.apk"
+          elif [ "$ABI" = "x86" ]; then
+            ABI_PATTERN="*x86.apk"
+          else
+            ABI_PATTERN="*.apk"
+          fi
+          cp android/app/build/outputs/apk/$FLAVOR/release/$ABI_PATTERN staged/
+          echo "Staged APK(s):"
+          ls -la staged/
+        timeout-minutes: 2
+
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
           name: Bilup-${{ matrix.range }}-${{ matrix.flavor }}-${{ matrix.abi }}
-          path: android/app/build/outputs/apk/${{ matrix.flavor }}/*/*.apk
+          path: staged/*.apk
           if-no-files-found: error
           retention-days: 30
         timeout-minutes: 5
