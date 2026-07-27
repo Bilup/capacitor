@@ -92,13 +92,15 @@ public class MainActivity extends BridgeActivity {
         WebSettings settings = webView.getSettings();
 
         if (isPhoneDevice()) {
+            // 手机：内容适配屏幕宽度，初始缩小至全屏可见
             settings.setLoadWithOverviewMode(true);
             settings.setUseWideViewPort(true);
             settings.setSupportZoom(false);
             settings.setBuiltInZoomControls(false);
             settings.setDisplayZoomControls(false);
         } else {
-            settings.setLoadWithOverviewMode(false);
+            // 平板：同样适配屏幕宽度，但允许用户手动缩放
+            settings.setLoadWithOverviewMode(true);
             settings.setUseWideViewPort(true);
             settings.setSupportZoom(true);
             settings.setBuiltInZoomControls(true);
