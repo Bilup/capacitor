@@ -1,18 +1,27 @@
 package org.bilup.app;
 
+import android.Manifest;
+import android.content.pm.PackageManager;
+import android.os.Build;
 import android.os.Bundle;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
+
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.WebViewListener;
 
 public class MainActivity extends BridgeActivity {
     private static final String DEVICE_TYPE_PHONE = "phone";
+    private static final int REQUEST_CODE_STORAGE_PERMISSION = 100;
 
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        checkAndRequestStoragePermission();
 
         getBridge().addWebViewListener(new WebViewListener() {
             @Override
@@ -30,6 +39,40 @@ public class MainActivity extends BridgeActivity {
                 new FileDownloadHelper(MainActivity.this, webView).setupDownloadListener();
             }
         });
+    }
+
+    /**
+     * 检测并请求修改手机存储的权限（运行时权限）。
+     * - Android 6-9 (API 23-28): 需要 WRITE_EXTERNAL_STORAGE
+     * - Android 10-12 (API 29-32): 需要 READ_EXTERNAL_STORAGE
+     * - Android 13+ (API 33+): 使用 MediaStore 无需额外权限
+     */
+    private void checkAndRequestStoragePermission() {
+        String permission = null;
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            // Android 13+, MediaStore 无需存储权限
+            return;
+        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Android 10-12: READ_EXTERNAL_STORAGE
+            permission = Manifest.permission.READ_EXTERNAL_STORAGE;
+        } else {
+            // Android 6-9: WRITE_EXTERNAL_STORAGE
+            permission = Manifest.permission.WRITE_EXTERNAL_STORAGE;
+        }
+
+        if (ContextCompat.checkSelfPermission(this, permission)
+                != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this,
+                    new String[]{permission}, REQUEST_CODE_STORAGE_PERMISSION);
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode,
+                                           String[] permissions,
+                                           int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        // 权限请求结果在此处理，用户拒绝后不影响已有功能（MediaStore 备用方案可用）
     }
 
     private boolean isPhoneDevice() {

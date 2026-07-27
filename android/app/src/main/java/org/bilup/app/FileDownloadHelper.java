@@ -100,7 +100,7 @@ public class FileDownloadHelper {
             }
         } catch (Exception e) {
             Toast.makeText(context,
-                    "文件保存失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    "文件保存失败", Toast.LENGTH_LONG).show();
         }
     }
 
@@ -117,34 +117,34 @@ public class FileDownloadHelper {
             uri = resolver.insert(MediaStore.Files.getContentUri("external"), values);
         }
 
-            if (uri != null) {
-                URL url = new URL(fileUrl);
-                HttpURLConnection conn = (HttpURLConnection) url.openConnection();
-                conn.setInstanceFollowRedirects(true);
-                conn.connect();
+        if (uri != null) {
+            URL url = new URL(fileUrl);
+            HttpURLConnection conn = (HttpURLConnection) url.openConnection();
+            conn.setInstanceFollowRedirects(true);
+            conn.connect();
 
-                try (InputStream input = conn.getInputStream();
-                     OutputStream output = resolver.openOutputStream(uri)) {
-                    if (output == null) {
-                        throw new IOException("无法打开输出流，URI: " + uri);
-                    }
-                    byte[] buffer = new byte[8192];
-                    int len;
-                    while ((len = input.read(buffer)) != -1) {
-                        output.write(buffer, 0, len);
-                    }
-                } finally {
-                    conn.disconnect();
+            try (InputStream input = conn.getInputStream();
+                 OutputStream output = resolver.openOutputStream(uri)) {
+                if (output == null) {
+                    throw new IOException("无法打开输出流，URI: " + uri);
                 }
-
-                ContentValues updateValues = new ContentValues();
-                updateValues.put(MediaStore.Downloads.IS_PENDING, 0);
-                resolver.update(uri, updateValues, null, null);
-
-                Toast.makeText(context, "文件已保存至 下载/Bilup/" + fileName, Toast.LENGTH_LONG).show();
-            } else {
-                saveFileWithDownloadManager(fileUrl, fileName, mimeType);
+                byte[] buffer = new byte[8192];
+                int len;
+                while ((len = input.read(buffer)) != -1) {
+                    output.write(buffer, 0, len);
+                }
+            } finally {
+                conn.disconnect();
             }
+
+            ContentValues updateValues = new ContentValues();
+            updateValues.put(MediaStore.Downloads.IS_PENDING, 0);
+            resolver.update(uri, updateValues, null, null);
+
+            Toast.makeText(context, "文件已保存至 下载/Bilup/" + fileName, Toast.LENGTH_LONG).show();
+        } else {
+            saveFileWithDownloadManager(fileUrl, fileName, mimeType);
+        }
     }
 
     private void saveFileWithDownloadManager(String fileUrl, String fileName, String mimeType) {
@@ -162,10 +162,12 @@ public class FileDownloadHelper {
             if (dm != null) {
                 dm.enqueue(request);
                 Toast.makeText(context, "文件已保存至 下载/Bilup/" + fileName, Toast.LENGTH_LONG).show();
+            } else {
+                throw new Exception("DownloadManager 服务不可用");
             }
         } catch (Exception e) {
             Toast.makeText(context,
-                    "文件保存失败: " + e.getMessage(), Toast.LENGTH_LONG).show();
+                    "文件保存失败", Toast.LENGTH_LONG).show();
         }
     }
 }

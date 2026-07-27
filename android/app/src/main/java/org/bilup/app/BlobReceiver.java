@@ -35,10 +35,10 @@ public class BlobReceiver {
     public void saveBlob(String base64Data, String fileName, String mimeType) {
         try {
             byte[] data = Base64.decode(base64Data, Base64.DEFAULT);
-            String savePath = saveBytesToFile(data, fileName, mimeType);
-            showToast("文件已保存至 " + savePath + "/" + fileName);
+            saveBytesToFile(data, fileName, mimeType);
+            showToast("文件已保存至 下载/Bilup/" + fileName);
         } catch (Exception e) {
-            showToast("文件保存失败: " + e.getMessage());
+            showToast("文件保存失败");
         }
     }
 
@@ -81,16 +81,19 @@ public class BlobReceiver {
     }
 
     private String saveViaFileSystem(byte[] data, String fileName) throws Exception {
-        File dir = new File(
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS), "Bilup");
-        if (!dir.exists()) {
-            dir.mkdirs();
+        File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        if (downloadDir == null) {
+            throw new IOException("无法获取下载目录");
+        }
+        File dir = new File(downloadDir, "Bilup");
+        if (!dir.exists() && !dir.mkdirs()) {
+            throw new IOException("无法创建目录: " + dir.getAbsolutePath());
         }
         File file = new File(dir, fileName);
         try (FileOutputStream fos = new FileOutputStream(file)) {
             fos.write(data);
         }
-        return dir.getAbsolutePath();
+        return "下载/Bilup";
     }
 
     private void showToast(final String message) {
