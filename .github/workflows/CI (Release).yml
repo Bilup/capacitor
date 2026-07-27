@@ -238,7 +238,9 @@ jobs:
           else
             ABI_TASK="X86_64"
           fi
-          GRADLE_CMD="assemble${FLAVOR}${ABI_TASK}Release"
+          # Capitalize first letter of flavor for Gradle task name (phone→Phone, tablet→Tablet)
+          FLAVOR_CAP="$(echo "${FLAVOR:0:1}" | tr '[:lower:]' '[:upper:]')${FLAVOR:1}"
+          GRADLE_CMD="assemble${FLAVOR_CAP}${ABI_TASK}Release"
           echo "============================================"
           echo "Building: $GRADLE_CMD (minSdk=$MIN_SDK)"
           echo "============================================"
