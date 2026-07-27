@@ -1,12 +1,17 @@
 package org.bilup.app;
 
 import android.Manifest;
+import android.content.DialogInterface;
 import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Bundle;
+import android.webkit.JsPromptResult;
+import android.webkit.JsResult;
+import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 
+import androidx.appcompat.app.AlertDialog;
 import androidx.core.app.ActivityCompat;
 import androidx.core.content.ContextCompat;
 
@@ -32,8 +37,10 @@ public class MainActivity extends BridgeActivity {
             @Override
             public void onPageLoaded(WebView webView) {
                 configureDisplaySettings(webView);
+                // 设置 WebChromeClient（包装原有 client，支持 JS 弹窗）
+                setupWebChromeClient(webView);
                 // 注入 JS 接口必须在 evaluateJavascript 之前
-                webView.addJavascriptInterface(new BlobReceiver(MainActivity.this), "BilupFileBridge");
+                webView.addJavascriptInterface(new BlobReceiver(MainActivity.this, webView), "BilupFileBridge");
                 WebViewEnhancer.injectViewportMeta(webView);
                 WebViewEnhancer.injectMobileEnhancements(webView);
                 new FileDownloadHelper(MainActivity.this, webView).setupDownloadListener();
@@ -42,28 +49,25 @@ public class MainActivity extends BridgeActivity {
     }
 
     /**
-     * 检测并请求修改手机存储的权限（运行时权限）。
-     * - Android 6-9 (API 23-28): 需要 WRITE_EXTERNAL_STORAGE
-     * - Android 10-12 (API 29-32): 需要 READ_EXTERNAL_STORAGE
-     * - Android 13+ (API 33+): 使用 MediaStore 无需额外权限
+     * 检测并请求外部存储写入权限。
+     *
+     * 权限需求说明：
+     * - Android 10+ (API 29+)：使用 MediaStore.Downloads 保存，无需任何存储权限
+     * - Android 7-9 (API 24-28)：使用 Environment.getExternalStoragePublicDirectory，
+     *   需要 WRITE_EXTERNAL_STORAGE 权限
+     * - Android 6 (API 23)：当前 minSdkVersion=24，不会到达此分支
      */
     private void checkAndRequestStoragePermission() {
-        String permission = null;
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            // Android 13+, MediaStore 无需存储权限
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            // Android 10+ 使用 MediaStore，无需存储权限
             return;
-        } else if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            // Android 10-12: READ_EXTERNAL_STORAGE
-            permission = Manifest.permission.READ_EXTERNAL_STORAGE;
-        } else {
-            // Android 6-9: WRITE_EXTERNAL_STORAGE
-            permission = Manifest.permission.WRITE_EXTERNAL_STORAGE;
         }
-
-        if (ContextCompat.checkSelfPermission(this, permission)
+        // Android 7-9：需要 WRITE_EXTERNAL_STORAGE
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)
                 != PackageManager.PERMISSION_GRANTED) {
             ActivityCompat.requestPermissions(this,
-                    new String[]{permission}, REQUEST_CODE_STORAGE_PERMISSION);
+                    new String[]{Manifest.permission.WRITE_EXTERNAL_STORAGE},
+                    REQUEST_CODE_STORAGE_PERMISSION);
         }
     }
 
@@ -73,6 +77,128 @@ public class MainActivity extends BridgeActivity {
                                            int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         // 权限请求结果在此处理，用户拒绝后不影响已有功能（MediaStore 备用方案可用）
+    }
+
+    /**
+     * 设置 WebChromeClient。
+     * 包装 WebView 原有的 WebChromeClient（Capacitor 内部已设置），在其基础上添加
+     * JS 弹窗（alert/confirm/prompt）和 window.open() 支持，避免前端弹窗被静默忽略。
+     */
+    private void setupWebChromeClient(WebView webView) {
+        final WebChromeClient originalClient = webView.getWebChromeClient();
+
+        webView.setWebChromeClient(new WebChromeClient() {
+            // ==================== JS 弹窗 ====================
+
+            @Override
+            public boolean onJsAlert(WebView view, String url, String message, final JsResult result) {
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("提示")
+                        .setMessage(message)
+                        .setPositiveButton("确定", new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                result.confirm();
+                            }
+                        })
+                        .setCancelable(false)
+                        .show();
+                return true;
+            }
+
+            @Override
+            public boolean onJsConfirm(WebView view, String url, String message, final JsResult result) {
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("确认")
+                        .setMessage(message)
+                        .setPositiveButton("确定", new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                result.confirm();
+                            }
+                        })
+                        .setNegativeButton("取消", new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                result.cancel();
+                            }
+                        })
+                        .setCancelable(false)
+                        .show();
+                return true;
+            }
+
+            @Override
+            public boolean onJsPrompt(WebView view, String url, String message,
+                                       String defaultValue, final JsPromptResult result) {
+                // 使用 AlertDialog 带输入框
+                android.widget.EditText input = new android.widget.EditText(MainActivity.this);
+                input.setText(defaultValue != null ? defaultValue : "");
+                new AlertDialog.Builder(MainActivity.this)
+                        .setTitle("输入")
+                        .setMessage(message)
+                        .setView(input)
+                        .setPositiveButton("确定", new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                result.confirm(input.getText().toString());
+                            }
+                        })
+                        .setNegativeButton("取消", new DialogInterface.OnClickListener() {
+                            @Override
+                            public void onClick(DialogInterface dialog, int which) {
+                                result.cancel();
+                            }
+                        })
+                        .setCancelable(false)
+                        .show();
+                return true;
+            }
+
+            // ==================== window.open() 支持 ====================
+
+            @Override
+            public boolean onCreateWindow(WebView view, boolean isDialog,
+                                          boolean isUserGesture, android.os.Message resultMsg) {
+                // 将 window.open() 的目标 URL 在当前 WebView 中加载（不打开新窗口）
+                WebView.HitTestResult hr = view.getHitTestResult();
+                String url = hr != null ? hr.getExtra() : null;
+                if (url == null) {
+                    url = view.getUrl();
+                }
+                if (url != null) {
+                    webView.loadUrl(url);
+                }
+                android.webkit.WebView.WebViewTransport transport =
+                        (android.webkit.WebView.WebViewTransport) resultMsg.obj;
+                transport.setWebView(webView);
+                resultMsg.sendToTarget();
+                return true;
+            }
+
+            // ==================== 委托其余方法给 Capacitor 原有 client ====================
+
+            @Override
+            public void onProgressChanged(WebView view, int newProgress) {
+                if (originalClient != null) {
+                    originalClient.onProgressChanged(view, newProgress);
+                }
+            }
+
+            @Override
+            public void onReceivedTitle(WebView view, String title) {
+                if (originalClient != null) {
+                    originalClient.onReceivedTitle(view, title);
+                }
+            }
+
+            @Override
+            public void onReceivedIcon(WebView view, android.graphics.Bitmap icon) {
+                if (originalClient != null) {
+                    originalClient.onReceivedIcon(view, icon);
+                }
+            }
+        });
     }
 
     private boolean isPhoneDevice() {
@@ -86,6 +212,8 @@ public class MainActivity extends BridgeActivity {
         settings.setDatabaseEnabled(true);
         settings.setAllowFileAccess(true);
         settings.setAllowContentAccess(true);
+        // 允许 JavaScript 通过 window.open() 打开新窗口
+        settings.setJavaScriptCanOpenWindowsAutomatically(true);
     }
 
     private void configureDisplaySettings(WebView webView) {

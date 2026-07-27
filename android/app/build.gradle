@@ -6,8 +6,12 @@ def appVersion = "1.6.1"
 try {
     def versionFile = rootProject.file('scripts/version.json')
     if (versionFile.exists()) {
-        def versionJson = new groovy.json.JsonSlurper().parseText(versionFile.text)
-        appVersion = versionJson.version
+        def text = versionFile.text
+        // Simple regex extraction to avoid JsonSlurper class resolution issues with AGP 8.x
+        def match = text =~ /"version"\s*:\s*"([^"]+)"/
+        if (match) {
+            appVersion = match[0][1]
+        }
         logger.lifecycle("Using version from scripts/version.json: ${appVersion}")
     } else {
         logger.warn("scripts/version.json not found, using default version: ${appVersion}")
@@ -24,7 +28,8 @@ android {
     }
     defaultConfig {
         applicationId "org.bilup.app"
-        minSdkVersion rootProject.ext.minSdkVersion
+        // Support -PbilupMinSdk=N CLI prop to override minSdkVersion (CI builds by version range)
+        minSdkVersion project.findProperty('bilupMinSdk')?.toInteger() ?: rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
         versionCode 1
         versionName appVersion

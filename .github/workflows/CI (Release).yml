@@ -1,5 +1,8 @@
 name: CI (Release)
 
+# Only triggered on v* tag pushes or manual dispatch.
+# Debug workflow (push/PR) does NOT run on tag pushes, so these two don't overlap.
+
 on:
   push:
     tags:
@@ -9,8 +12,14 @@ on:
 permissions:
   contents: write
 
+env:
+  ANDROID_BUILD_TOOLS: '35.0.0'
+  ANDROID_PLATFORM: 'android-35'
+
 jobs:
+  # ==================== 1. Build scratch-gui frontend ====================
   build-gui:
+    name: build-gui
     runs-on: ubuntu-latest
     timeout-minutes: 60
     outputs:
@@ -86,12 +95,59 @@ jobs:
           retention-days: 1
         timeout-minutes: 5
 
-  # --- build-apk is now split into 4 jobs ---
-
-  build-phone-release:
+  # ==================== 2. Build Release APKs (3 version ranges x 2 flavors x 1-2 ABIs, all parallel) ====================
+  build-apk:
+    name: build-apk (${{ matrix.range }}, ${{ matrix.flavor }}, ${{ matrix.abi }})
     needs: build-gui
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # ---------- Android 7.0-9.0: x86 only ----------
+          - range: android-7-9
+            minSdk: 24
+            flavor: phone
+            abi: x86
+          - range: android-7-9
+            minSdk: 24
+            flavor: tablet
+            abi: x86
+          # ---------- Android 10-12: x86 + x86_64 ----------
+          - range: android-10-12
+            minSdk: 29
+            flavor: phone
+            abi: x86
+          - range: android-10-12
+            minSdk: 29
+            flavor: phone
+            abi: x86_64
+          - range: android-10-12
+            minSdk: 29
+            flavor: tablet
+            abi: x86
+          - range: android-10-12
+            minSdk: 29
+            flavor: tablet
+            abi: x86_64
+          # ---------- Android 13-16: x86 + x86_64 ----------
+          - range: android-13-16
+            minSdk: 33
+            flavor: phone
+            abi: x86
+          - range: android-13-16
+            minSdk: 33
+            flavor: phone
+            abi: x86_64
+          - range: android-13-16
+            minSdk: 33
+            flavor: tablet
+            abi: x86
+          - range: android-13-16
+            minSdk: 33
+            flavor: tablet
+            abi: x86_64
 
     steps:
       - name: Checkout repository
@@ -120,14 +176,14 @@ jobs:
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
         with:
-          packages: "build-tools;35.0.0 platforms;android-35"
+          packages: "build-tools;${{ env.ANDROID_BUILD_TOOLS }} platforms;${{ env.ANDROID_PLATFORM }}"
         timeout-minutes: 15
 
       - name: Add Android SDK to PATH
         run: |
           echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
           echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
-          echo "$ANDROID_HOME/build-tools/35.0.0" >> $GITHUB_PATH
+          echo "$ANDROID_HOME/build-tools/${{ env.ANDROID_BUILD_TOOLS }}" >> $GITHUB_PATH
         timeout-minutes: 2
 
       - name: Download Android project
@@ -141,21 +197,6 @@ jobs:
         run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
         timeout-minutes: 2
 
-      - name: Remove existing keystore if present
-        run: rm -f android/app/release.keystore
-        timeout-minutes: 2
-
-      - name: Generate PKCS12 Keystore
-        run: |
-          keytool -genkeypair -v -keystore android/app/release.keystore \
-            -alias ${{ secrets.KEY_ALIAS }} \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass ${{ secrets.KEYSTORE_PASSWORD }} \
-            -keypass ${{ secrets.KEY_PASSWORD }} \
-            -dname "CN=Bilup, OU=Bilup, O=Bilup, L=Beijing, ST=Beijing, C=CN" \
-            -storetype PKCS12
-        timeout-minutes: 5
-
       - name: Cache Gradle wrapper and dependencies
         uses: actions/cache@v4
         with:
@@ -167,86 +208,9 @@ jobs:
             ${{ runner.os }}-gradle-
         timeout-minutes: 5
 
-      - name: Build Phone Release APK
-        run: |
-          cd android
-          chmod +x gradlew
-          ./gradlew assemblePhoneRelease --no-daemon --parallel --build-cache -x test -x lint --console=plain --stacktrace
-        env:
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
-          GRADLE_OPTS: "-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g"
-          ANDROID_HOME: ${{ env.ANDROID_HOME }}
-        timeout-minutes: 40
-
-      - name: Upload Phone Release APK
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-apk-phone
-          path: android/app/build/outputs/apk/phone/release/*.apk
-          retention-days: 30
-        timeout-minutes: 5
-
-  build-tablet-release:
-    needs: build-gui
-    runs-on: ubuntu-latest
-    timeout-minutes: 60
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-        timeout-minutes: 5
-
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-          cache: 'npm'
-        timeout-minutes: 5
-
-      - name: Install dependencies
-        run: npm ci
-        timeout-minutes: 10
-
-      - name: Setup Java JDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '21'
-          cache: 'gradle'
-        timeout-minutes: 10
-
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-        with:
-          packages: "build-tools;35.0.0 platforms;android-35"
-        timeout-minutes: 15
-
-      - name: Add Android SDK to PATH
-        run: |
-          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> $GITHUB_PATH
-          echo "$ANDROID_HOME/platform-tools" >> $GITHUB_PATH
-          echo "$ANDROID_HOME/build-tools/35.0.0" >> $GITHUB_PATH
-        timeout-minutes: 2
-
-      - name: Download Android project
-        uses: actions/download-artifact@v4
-        with:
-          name: android-project
-          path: android/
-        timeout-minutes: 5
-
-      - name: Create local.properties for Android SDK
-        run: echo "sdk.dir=$ANDROID_HOME" > android/local.properties
-        timeout-minutes: 2
-
-      - name: Remove existing keystore if present
-        run: rm -f android/app/release.keystore
-        timeout-minutes: 2
-
       - name: Generate PKCS12 Keystore
         run: |
+          rm -f android/app/release.keystore
           keytool -genkeypair -v -keystore android/app/release.keystore \
             -alias ${{ secrets.KEY_ALIAS }} \
             -keyalg RSA -keysize 2048 -validity 10000 \
@@ -256,40 +220,46 @@ jobs:
             -storetype PKCS12
         timeout-minutes: 5
 
-      - name: Cache Gradle wrapper and dependencies
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: ${{ runner.os }}-gradle-${{ hashFiles('android/gradle/wrapper/gradle-wrapper.properties') }}
-          restore-keys: |
-            ${{ runner.os }}-gradle-
-        timeout-minutes: 5
-
-      - name: Build Tablet Release APK
-        run: |
-          cd android
-          chmod +x gradlew
-          ./gradlew assembleTabletRelease --no-daemon --parallel --build-cache -x test -x lint --console=plain --stacktrace
+      - name: Build Release APK
         env:
+          FLAVOR: ${{ matrix.flavor }}
+          ABI: ${{ matrix.abi }}
+          MIN_SDK: ${{ matrix.minSdk }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
           KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
           GRADLE_OPTS: "-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g"
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
+        run: |
+          cd android
+          chmod +x gradlew
+          if [ "$ABI" = "x86" ]; then
+            ABI_TASK="X86"
+          else
+            ABI_TASK="X86_64"
+          fi
+          GRADLE_CMD="assemble${FLAVOR}${ABI_TASK}Release"
+          echo "============================================"
+          echo "Building: $GRADLE_CMD (minSdk=$MIN_SDK)"
+          echo "============================================"
+          ./gradlew "$GRADLE_CMD" -PbilupMinSdk="$MIN_SDK" \
+            --no-daemon --parallel --build-cache -x test -x lint \
+            --console=plain --stacktrace
         timeout-minutes: 40
 
-      - name: Upload Tablet Release APK
+      - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: release-apk-tablet
-          path: android/app/build/outputs/apk/tablet/release/*.apk
+          name: Bilup-${{ matrix.range }}-${{ matrix.flavor }}-${{ matrix.abi }}
+          path: android/app/build/outputs/apk/${{ matrix.flavor }}/*/*.apk
+          if-no-files-found: error
           retention-days: 30
         timeout-minutes: 5
 
+  # ==================== 3. Publish to GitHub Release ====================
   publish-release:
-    needs: [build-phone-release, build-tablet-release]
+    name: Publish to GitHub Release
+    needs: build-apk
     runs-on: ubuntu-latest
     timeout-minutes: 15
 
@@ -303,36 +273,38 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: '24'
         timeout-minutes: 5
 
-      - name: Download Phone APKs
+      - name: Download all APKs
         uses: actions/download-artifact@v4
         with:
-          name: release-apk-phone
           path: ./apks/
-        timeout-minutes: 5
-
-      - name: Download Tablet APKs
-        uses: actions/download-artifact@v4
-        with:
-          name: release-apk-tablet
-          path: ./apks/
-        timeout-minutes: 5
+          pattern: Bilup-*
+          merge-multiple: true
+        timeout-minutes: 10
 
       - name: List APK files
-        run: ls -la ./apks/
+        run: |
+          echo "============================================"
+          echo "APKs to be published to GitHub Release:"
+          echo "============================================"
+          find ./apks -name '*.apk' -type f -exec ls -lh {} \;
         timeout-minutes: 2
 
       - name: Upload to GitHub Releases
         run: |
           TAG_NAME="${{ github.ref_name }}"
-          RELEASE_NAME="${TAG_NAME}"
+          echo "Creating release: ${TAG_NAME}"
+          find ./apks -name '*.apk' -type f -print0 | xargs -0 gh release create "${TAG_NAME}" \
+            --title "${TAG_NAME}" \
+            --notes "Automated release build
 
-          gh release create "${TAG_NAME}" \
-            --title "${RELEASE_NAME}" \
-            --notes "Automated release build" \
-            ./apks/*.apk
+          | Version Range | Flavor | ABI |
+          |---------------|--------|-----|
+          | 7.0-9.0 (minSdk=24) | phone / tablet | x86 |
+          | 10-12 (minSdk=29) | phone / tablet | x86, x86_64 |
+          | 13-16 (minSdk=33) | phone / tablet | x86, x86_64 |"
         env:
           GH_TOKEN: "${{ github.token }}"
         timeout-minutes: 10
