@@ -48,6 +48,26 @@ public class FileDownloadHelper {
     }
 
     /**
+     * 清洗文件名，移除文件系统不允许的非法字符。
+     */
+    private String sanitizeFileName(String fileName) {
+        if (fileName == null || fileName.trim().isEmpty()) {
+            return "Bilup_project_" + System.currentTimeMillis() + ".sb3";
+        }
+        String cleaned = fileName
+                .replaceAll("[\\\\/:*?\"<>|]", "_")
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (cleaned.isEmpty() || cleaned.equals(".") || cleaned.equals("..")) {
+            return "Bilup_project_" + System.currentTimeMillis() + ".sb3";
+        }
+        if (cleaned.length() > 150) {
+            cleaned = cleaned.substring(0, 150);
+        }
+        return cleaned;
+    }
+
+    /**
      * 为 WebView 设置下载监听器
      */
     public void setupDownloadListener() {
@@ -56,10 +76,8 @@ public class FileDownloadHelper {
             public void onDownloadStart(String url, String userAgent,
                     String contentDisposition, String mimetype, long contentLength) {
 
-                String fileName = URLUtil.guessFileName(url, contentDisposition, mimetype);
-                if (fileName == null || fileName.isEmpty()) {
-                    fileName = "Bilup_project_" + System.currentTimeMillis() + ".sb3";
-                }
+                String fileName = sanitizeFileName(
+                        URLUtil.guessFileName(url, contentDisposition, mimetype));
 
                 Log.d(TAG, "Download started: url=" + url + ", fileName=" + fileName
                         + ", mimeType=" + mimetype + ", contentLength=" + contentLength);
@@ -262,7 +280,8 @@ public class FileDownloadHelper {
     private void notifyJSSaveComplete(String fileName) {
         String js = "javascript:(function(){"
             + "var e = new CustomEvent('bilupSaveComplete', {"
-            + "  detail: { fileName: '" + fileName.replace("'", "\\'") + "' }"
+            + "  detail: { fileName: '" + fileName.replace("'", "\\'") + "', path: '" +
+            ("下载/Bilup/" + fileName).replace("'", "\\'") + "' }"
             + "});"
             + "document.dispatchEvent(e);"
             + "})();";

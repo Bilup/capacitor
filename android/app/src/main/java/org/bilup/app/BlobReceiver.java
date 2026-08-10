@@ -42,10 +42,31 @@ public class BlobReceiver {
         this.webView = webView;
     }
 
+    /**
+     * 清洗文件名，移除文件系统不允许的非法字符，防止保存失败。
+     */
+    private String sanitizeFileName(String fileName) {
+        if (fileName == null || fileName.trim().isEmpty()) {
+            return "Bilup_project_" + System.currentTimeMillis() + ".sb3";
+        }
+        // 移除路径分隔符及 Windows/Android 文件系统非法字符
+        String cleaned = fileName
+                .replaceAll("[\\\\/:*?\"<>|]", "_")
+                .replaceAll("\\s+", " ")
+                .trim();
+        if (cleaned.isEmpty() || cleaned.equals(".") || cleaned.equals("..")) {
+            return "Bilup_project_" + System.currentTimeMillis() + ".sb3";
+        }
+        // 限制文件名长度，避免文件系统限制（255 字节）
+        if (cleaned.length() > 150) {
+            cleaned = cleaned.substring(0, 150);
+        }
+        return cleaned;
+    }
+
     @JavascriptInterface
     public void saveBlob(String base64Data, String fileName, String mimeType) {
-        String safeName = (fileName != null && !fileName.isEmpty()) ? fileName
-                : "Bilup_project_" + System.currentTimeMillis() + ".sb3";
+        String safeName = sanitizeFileName(fileName);
         String safeMime = (mimeType != null && !mimeType.isEmpty()) ? mimeType : "application/octet-stream";
 
         Log.d(TAG, "saveBlob called: fileName=" + safeName + ", mimeType=" + safeMime + ", dataLen="
@@ -170,10 +191,11 @@ public class BlobReceiver {
                 // 1. 打开文件位置预览（使用可公开访问的 URI）
                 openFileLocation(fileUri, mimeType);
 
-                // 2. JS 回调：通知前端保存完成
+                // 2. JS 回调：通知前端保存完成（携带可展示的路径）
                 String jsCallback = "javascript:(function(){"
                     + "var e = new CustomEvent('bilupSaveComplete', {"
-                    + "  detail: { fileName: '" + fileName.replace("'", "\\'") + "' }"
+                    + "  detail: { fileName: '" + fileName.replace("'", "\\'") + "', path: '" +
+                    ("下载/Bilup/" + fileName).replace("'", "\\'") + "' }"
                     + "});"
                     + "document.dispatchEvent(e);"
                     + "})();";
