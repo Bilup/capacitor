@@ -55,31 +55,30 @@ jobs:
             git clone -b develop --single-branch --depth 1 https://github.com/Bilup/scratch-gui.git
           fi
 
-      - name: Cache scratch-gui dependencies
+      - name: Cache scratch-gui pnpm store
         uses: actions/cache@v4
         id: scratch-gui-cache
         with:
-          path: scratch-gui/node_modules
-          key: ${{ runner.os }}-scratch-gui-${{ hashFiles('scratch-gui/package-lock.json') }}
+          path: ~/.local/share/pnpm/store
+          key: ${{ runner.os }}-scratch-gui-${{ hashFiles('scratch-gui/pnpm-lock.yaml') }}
           restore-keys: |
             ${{ runner.os }}-scratch-gui-
         timeout-minutes: 5
 
-      - name: Setup Bun
-        uses: oven-sh/setup-bun@v1
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
         with:
-          bun-version: latest
-          cache: true
+          version: 9
         timeout-minutes: 5
 
       - name: Install scratch-gui dependencies (if cache miss)
         if: steps.scratch-gui-cache.outputs.cache-hit != 'true'
         timeout-minutes: 15
-        run: cd scratch-gui && bun install
+        run: cd scratch-gui && pnpm install
 
       - name: Build scratch-gui
         timeout-minutes: 20
-        run: cd scratch-gui && bun run build
+        run: cd scratch-gui && pnpm run build
 
       - name: Sync Capacitor and copy web assets
         timeout-minutes: 10
