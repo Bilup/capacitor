@@ -71,9 +71,7 @@ jobs:
           version: 9
         timeout-minutes: 5
 
-      - name: Install scratch-gui dependencies (if cache miss)
-        if: steps.scratch-gui-cache.outputs.cache-hit != 'true'
-        timeout-minutes: 15
+      - name: Install scratch-gui dependencies 
         run: cd scratch-gui && pnpm install
 
       - name: Build scratch-gui

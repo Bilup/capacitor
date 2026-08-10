@@ -23,6 +23,15 @@ public class MainActivity extends BridgeActivity {
     private static final int REQUEST_CODE_STORAGE_PERMISSION = 100;
 
     @Override
+    protected void load() {
+        super.load();
+        // 用自定义 WebViewClient 修复 /editor 路由，避免被 html5mode 错误回退到 index.html
+        if (getBridge() != null) {
+            getBridge().setWebViewClient(new BilupWebViewClient(getBridge()));
+        }
+    }
+
+    @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 

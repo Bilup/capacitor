@@ -3,7 +3,8 @@
   "appName": "Bilup",
   "webDir": "scratch-gui/build",
   "server": {
-    "androidScheme": "https"
+    "androidScheme": "https",
+    "html5mode": true
   },
   "android": {
     "allowMixedContent": true,
