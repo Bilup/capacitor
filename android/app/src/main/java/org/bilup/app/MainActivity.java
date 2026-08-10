@@ -2,11 +2,14 @@ package org.bilup.app;
 
 import android.Manifest;
 import android.content.DialogInterface;
+import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.webkit.JsPromptResult;
 import android.webkit.JsResult;
+import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
@@ -21,11 +24,15 @@ import com.getcapacitor.WebViewListener;
 public class MainActivity extends BridgeActivity {
     private static final String DEVICE_TYPE_PHONE = "phone";
     private static final int REQUEST_CODE_STORAGE_PERMISSION = 100;
+    private static final int REQUEST_CODE_FILE_CHOOSER = 200;
+    // 保存 WebView 文件选择回调，等待 onActivityResult 返回用户选中的文件
+    private ValueCallback<Uri[]> filePathCallback;
 
     @Override
     protected void load() {
         super.load();
-        // 用自定义 WebViewClient 修复 /editor 路由，避免被 html5mode 错误回退到 index.html
+        // 用自定义 WebViewClient 修复 wildcard 页面路由（/editor、/addons、/player 等），
+        // 避免被 Capacitor 的 html5mode 错误回退到 index.html
         if (getBridge() != null) {
             getBridge().setWebViewClient(new BilupWebViewClient(getBridge()));
         }
@@ -185,6 +192,38 @@ public class MainActivity extends BridgeActivity {
                 return true;
             }
 
+            // ==================== 文件选择器（本地打开作品） ====================
+
+            @Override
+            public boolean onShowFileChooser(WebView webView,
+                                             ValueCallback<Uri[]> callback,
+                                             FileChooserParams fileChooserParams) {
+                // 若上一次选择尚未回调，先通知取消，避免 WebView 收到重复回调
+                if (MainActivity.this.filePathCallback != null) {
+                    MainActivity.this.filePathCallback.onReceiveValue(null);
+                }
+                MainActivity.this.filePathCallback = callback;
+
+                Intent intent = fileChooserParams.createIntent();
+                if (intent == null) {
+                    // 兜底：使用系统通用文件选择器
+                    intent = new Intent(Intent.ACTION_GET_CONTENT);
+                    intent.addCategory(Intent.CATEGORY_OPENABLE);
+                    intent.setType("*/*");
+                }
+                try {
+                    startActivityForResult(intent, REQUEST_CODE_FILE_CHOOSER);
+                } catch (Exception e) {
+                    // 无法打开文件选择器时通知前端失败
+                    if (MainActivity.this.filePathCallback != null) {
+                        MainActivity.this.filePathCallback.onReceiveValue(null);
+                        MainActivity.this.filePathCallback = null;
+                    }
+                    return false;
+                }
+                return true;
+            }
+
             // ==================== 委托其余方法给 Capacitor 原有 client ====================
 
             @Override
@@ -208,6 +247,34 @@ public class MainActivity extends BridgeActivity {
                 }
             }
         });
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        if (requestCode == REQUEST_CODE_FILE_CHOOSER) {
+            if (filePathCallback == null) {
+                super.onActivityResult(requestCode, resultCode, data);
+                return;
+            }
+            Uri[] results = null;
+            if (resultCode == RESULT_OK && data != null) {
+                if (data.getData() != null) {
+                    // 单个文件
+                    results = new Uri[]{data.getData()};
+                } else if (data.getClipData() != null) {
+                    // 多个文件
+                    int count = data.getClipData().getItemCount();
+                    results = new Uri[count];
+                    for (int i = 0; i < count; i++) {
+                        results[i] = data.getClipData().getItemAt(i).getUri();
+                    }
+                }
+            }
+            filePathCallback.onReceiveValue(results);
+            filePathCallback = null;
+            return;
+        }
+        super.onActivityResult(requestCode, resultCode, data);
     }
 
     private boolean isPhoneDevice() {
