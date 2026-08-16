@@ -2,7 +2,7 @@ apply plugin: 'com.android.application'
 apply from: '../signing.gradle'
 
 // Read version from version.json (with fallback for CI environments)
-def appVersion = "2.0.0"
+def appVersion = "2.0.2"
 try {
     def versionFile = rootProject.file('scripts/version.json')
     if (versionFile.exists()) {
