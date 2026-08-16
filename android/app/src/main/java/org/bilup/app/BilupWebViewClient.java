@@ -1,13 +1,18 @@
 package org.bilup.app;
 
+import android.content.Context;
 import android.net.Uri;
+import android.os.Handler;
+import android.os.Looper;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
+import android.widget.Toast;
 
 import com.getcapacitor.Bridge;
 import com.getcapacitor.BridgeWebViewClient;
 
+import java.util.Map;
 import java.util.regex.Pattern;
 
 /**
@@ -51,6 +56,11 @@ public class BilupWebViewClient extends BridgeWebViewClient {
     private static final Pattern P_NUM_EDITOR = Pattern.compile("^/\\d+/editor/?$");
     private static final Pattern P_NUM_EMBED = Pattern.compile("^/\\d+/embed/?$");
 
+    /** 需要拦截的账号域名（含其所有子域名） */
+    private static final String BLOCKED_ACCOUNTS_HOST = "accounts.bilup.org";
+    /** 拦截时提示用户的消息 */
+    private static final String BLOCKED_ACCOUNTS_TOAST = "该功能需要登录账号，当前版本已停用账号跳转";
+
     public BilupWebViewClient(Bridge bridge) {
         super(bridge);
         this.bridge = bridge;
@@ -84,8 +94,66 @@ public class BilupWebViewClient extends BridgeWebViewClient {
         return host != null && host.equalsIgnoreCase(bridge.getHost());
     }
 
+    /**
+     * 判断请求是否为 HTML 文档类请求（通过 Accept 请求头判断）。
+     * 用于区分 iframe 页面加载与图片/JS/CSS 等静态资源请求。
+     */
+    private boolean isHtmlDocumentRequest(WebResourceRequest request) {
+        Map<String, String> headers = request.getRequestHeaders();
+        if (headers == null) return false;
+        String accept = headers.get("Accept");
+        return accept != null && accept.toLowerCase().contains("text/html");
+    }
+
+    /**
+     * 判断 URL 是否指向被拦截的账号域名（accounts.bilup.org 及其子域名）。
+     */
+    private boolean isBlockedAccountsHost(Uri url) {
+        String host = url.getHost();
+        if (host == null) return false;
+        host = host.toLowerCase();
+        return host.equals(BLOCKED_ACCOUNTS_HOST) || host.endsWith("." + BLOCKED_ACCOUNTS_HOST);
+    }
+
+    /**
+     * 拦截所有跳转到 accounts.bilup.org 的导航操作：
+     * 用户点击链接、window.location、window.open 等都会被此方法拦截。
+     * 返回 true 表示导航被阻止。
+     */
+    @Override
+    public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
+        if (isBlockedAccountsHost(request.getUrl())) {
+            notifyAccountsBlocked();
+            return true;
+        }
+        return super.shouldOverrideUrlLoading(view, request);
+    }
+
+    /**
+     * 提示用户跳转已被拦截（切回主线程弹 Toast）。
+     * 注意不能用 getMainExecutor()：那是 API 28+ 的 API，minSdk=24 的老机器会崩溃。
+     */
+    private void notifyAccountsBlocked() {
+        final Context context = bridge.getContext();
+        if (context == null) return;
+        new Handler(Looper.getMainLooper()).post(new Runnable() {
+            @Override
+            public void run() {
+                Toast.makeText(context, BLOCKED_ACCOUNTS_TOAST, Toast.LENGTH_LONG).show();
+            }
+        });
+    }
+
     @Override
     public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+        // 拦截 iframe/子框架加载 accounts.bilup.org 的 HTML 文档请求。
+        // shouldOverrideUrlLoading 只覆盖主框架导航，iframe 内的跳转在这里拦截。
+        // 仅拦截 HTML 文档类请求（Accept 头含 text/html），避免误伤图片/JS/CSS 等静态资源，
+        // 也避免静态资源请求频繁触发 Toast。
+        if (isBlockedAccountsHost(request.getUrl()) && isHtmlDocumentRequest(request)) {
+            notifyAccountsBlocked();
+            return new WebResourceResponse("text/html", "UTF-8", null);
+        }
         // 不限制 isForMainFrame()：插件设置窗口通过 iframe 加载 /addons，
         // iframe 文档请求的 isForMainFrame() 为 false，也必须走路由映射。
         if (isLocalServerUrl(request.getUrl())) {
