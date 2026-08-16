@@ -293,10 +293,11 @@ public class MainActivity extends BridgeActivity {
 
         // ============ 性能优化（针对老机器） ============
         // 提高渲染进程优先级：老机器多任务时避免 WebView 渲染被系统回收/降频。
+        // RENDERER_PRIORITY_IMPORTANT 是最高优先级，保证渲染进程不被系统优先杀死。
         // 第二个参数 waivedWhenNotVisible=true：WebView 不可见时自动降级，节省资源。
         // setRendererPriorityPolicy 仅在 API 26+ 可用
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_HIGH, true);
+            webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true);
         }
     }
 
