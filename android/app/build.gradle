@@ -70,7 +70,11 @@ android {
             def flavor = variant.flavorName
             def version = defaultConfig.versionName
             def buildType = variant.buildType.name
-            output.outputFileName = "Bilup-android-${flavor}-${version}-${abiSuffix}.apk"
+            // CI 通过 -PbilupRange 传入版本范围（如 android-7-9），
+            // 保证不同 matrix job 的 APK 文件名唯一，避免发布合并时同名覆盖
+            // （否则 5 个 APK 会因同名互相覆盖，Release 上只剩 x86 / x86_64 两个）。
+            def range = project.findProperty('bilupRange') ?: "sdk${defaultConfig.minSdkVersion}"
+            output.outputFileName = "Bilup-android-${flavor}-${version}-${range}-${abiSuffix}.apk"
         }
     }
 }

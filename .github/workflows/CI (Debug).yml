@@ -188,6 +188,7 @@ jobs:
       - name: Build Debug APK
         env:
           MIN_SDK: ${{ matrix.minSdk }}
+          RANGE: ${{ matrix.range }}
           GRADLE_OPTS: "-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g"
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
         run: |
@@ -195,9 +196,9 @@ jobs:
           chmod +x gradlew
           GRADLE_CMD="assembleDeviceDebug"
           echo "============================================"
-          echo "Building: $GRADLE_CMD (minSdk=$MIN_SDK)"
+          echo "Building: $GRADLE_CMD (minSdk=$MIN_SDK, range=$RANGE)"
           echo "============================================"
-          ./gradlew "$GRADLE_CMD" -PbilupMinSdk="$MIN_SDK" \
+          ./gradlew "$GRADLE_CMD" -PbilupMinSdk="$MIN_SDK" -PbilupRange="$RANGE" \
             --no-daemon --parallel --build-cache -x test -x lint \
             --console=plain --stacktrace
         timeout-minutes: 40

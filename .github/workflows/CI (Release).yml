@@ -195,6 +195,7 @@ jobs:
       - name: Build Release APK
         env:
           MIN_SDK: ${{ matrix.minSdk }}
+          RANGE: ${{ matrix.range }}
           # 固定密钥信息来自仓库内 release.keystore（keystore_base64.txt 解码）：
           # alias=bilup, store/key 密码=bilup123（与 signing.gradle 默认值一致）。
           # 不再从 secrets 读取，避免与固定密钥不匹配导致签名失败或签名漂移。
@@ -208,9 +209,9 @@ jobs:
           chmod +x gradlew
           GRADLE_CMD="assembleDeviceRelease"
           echo "============================================"
-          echo "Building: $GRADLE_CMD (minSdk=$MIN_SDK)"
+          echo "Building: $GRADLE_CMD (minSdk=$MIN_SDK, range=$RANGE)"
           echo "============================================"
-          ./gradlew "$GRADLE_CMD" -PbilupMinSdk="$MIN_SDK" \
+          ./gradlew "$GRADLE_CMD" -PbilupMinSdk="$MIN_SDK" -PbilupRange="$RANGE" \
             --no-daemon --parallel --build-cache -x test -x lint \
             --console=plain --stacktrace
         timeout-minutes: 40
@@ -231,6 +232,14 @@ jobs:
           echo "Staged APK(s):"
           ls -la staged/
         timeout-minutes: 2
+
+      - name: Verify APK signature (v1 required for Android 7-9 install)
+        run: |
+          # 关键：Android 7-9 (API 24-28) 部分设备/安装器要求 v1 签名。
+          # AGP 8.x 默认关闭 v1，导致 "应用解析失败 / 应用未安装"。
+          # 此步强制校验发布产物包含 v1 签名，防止回归。
+          "$ANDROID_HOME/build-tools/${{ env.ANDROID_BUILD_TOOLS }}/apksigner" verify --verbose staged/*.apk
+        timeout-minutes: 3
 
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
