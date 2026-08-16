@@ -2,8 +2,10 @@ package org.bilup.app;
 
 import android.content.Context;
 import android.net.Uri;
+import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
 import android.webkit.WebView;
@@ -58,6 +60,14 @@ public class BilupWebViewClient extends BridgeWebViewClient {
 
     /** 需要拦截的账号域名（含其所有子域名） */
     private static final String BLOCKED_ACCOUNTS_HOST = "accounts.bilup.org";
+
+    /**
+     * 本地静态资源的缓存头。
+     * Capacitor 本地服务器对所有响应强制 Cache-Control: no-cache（见 WebViewLocalServer.PathHandler），
+     * 导致 JS/CSS/图片等静态资源无法被 WebView 磁盘缓存，每次进入编辑器都要重新从 APK 读取并解压，
+     * 这是大作品素材加载慢的重要原因。这里对带 contenthash 的构建产物覆盖为长缓存头。
+     */
+    private static final String STATIC_ASSET_CACHE_CONTROL = "public, max-age=604800, immutable";
 
     public BilupWebViewClient(Bridge bridge) {
         super(bridge);
@@ -146,6 +156,7 @@ public class BilupWebViewClient extends BridgeWebViewClient {
 
     @Override
     public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+        WebResourceResponse response;
         // 拦截 iframe/子框架加载 accounts.bilup.org 的 HTML 文档请求。
         // shouldOverrideUrlLoading 只覆盖主框架导航，iframe 内的跳转在这里拦截。
         // 仅拦截 HTML 文档类请求（Accept 头含 text/html），避免误伤图片/JS/CSS 等静态资源，
@@ -162,10 +173,74 @@ public class BilupWebViewClient extends BridgeWebViewClient {
                 // 仅改写内部资源路径，WebView 地址栏 URL 保持不变，
                 // 前端 WildcardRouter 仍能按原 pathname 解析页面类型。
                 WebResourceRequest rewritten = new RewrittenRequest(request, target);
-                return super.shouldInterceptRequest(view, rewritten);
+                response = super.shouldInterceptRequest(view, rewritten);
+            } else {
+                response = super.shouldInterceptRequest(view, request);
             }
+        } else {
+            response = super.shouldInterceptRequest(view, request);
         }
-        return super.shouldInterceptRequest(view, request);
+        // 本地静态资源注入长缓存头，让 WebView 磁盘缓存生效，加速素材/资源二次加载
+        return enableStaticAssetCache(request, response);
+    }
+
+    /**
+     * 为本地服务器的静态资源启用 WebView 磁盘缓存。
+     * <p>
+     * Capacitor 本地服务器（WebViewLocalServer.PathHandler）对所有响应强制设置
+     * {@code Cache-Control: no-cache}，WebView 因此从不缓存任何资源，导致每次打开
+     * 编辑器都要重新从 APK 读取（asset 多为压缩存储，读取即解压），大作品场景尤其明显。
+     * <p>
+     * 这里仅对带扩展名且非 HTML 的静态资源覆盖为长缓存头。scratch-gui 构建产物均带
+     * contenthash，文件名变化时 URL 同步变化，长缓存不会导致旧资源被误用；HTML 文档
+     * 保持 no-cache，确保应用更新后能立即加载新页面。
+     */
+    private WebResourceResponse enableStaticAssetCache(WebResourceRequest request,
+                                                       WebResourceResponse response) {
+        if (response == null) return null;
+        // 仅处理本地虚拟服务器上的资源，网络请求保持原样（由服务器返回的缓存头控制）
+        if (!isLocalServerUrl(request.getUrl())) return response;
+
+        String path = request.getUrl().getPath();
+        if (path == null || path.isEmpty()) return response;
+        // HTML 文档 / 无扩展名的 SPA 路由不做缓存，保证页面更新立即生效
+        if (path.endsWith(".html")) return response;
+        int dot = path.lastIndexOf('.');
+        if (dot <= 0 || dot == path.length() - 1) return response;
+
+        Map<String, String> headers = response.getResponseHeaders();
+        if (headers == null) return response;
+        headers.put("Cache-Control", STATIC_ASSET_CACHE_CONTROL);
+        return response;
+    }
+
+    /**
+     * 处理 WebView 渲染进程崩溃（通常由打开大作品时的内存不足引起）。
+     * <p>
+     * 默认行为是直接终止应用（表现为闪退）。这里接管崩溃事件，尝试重新加载
+     * 当前页面以恢复编辑器，把"闪退"降级为"重新加载"。仅在渲染进程确实崩溃
+     * 时处理，系统主动回收（didCrash() == false）时交给默认逻辑。
+     */
+    @Override
+    public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
+                && detail != null && detail.didCrash()) {
+            final String url = view != null ? view.getUrl() : null;
+            new Handler(Looper.getMainLooper()).post(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        if (view != null) {
+                            view.loadUrl(url != null ? url : bridge.getServerUrl());
+                        }
+                    } catch (Exception ignored) {
+                        // 重新加载失败时交给默认行为处理
+                    }
+                }
+            });
+            return true;
+        }
+        return super.onRenderProcessGone(view, detail);
     }
 
     /**

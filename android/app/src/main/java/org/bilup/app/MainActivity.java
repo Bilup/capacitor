@@ -1,6 +1,7 @@
 package org.bilup.app;
 
 import android.Manifest;
+import android.content.ComponentCallbacks2;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageManager;
@@ -298,6 +299,34 @@ public class MainActivity extends BridgeActivity {
         // setRendererPriorityPolicy 仅在 API 26+ 可用
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
             webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true);
+        }
+
+        // ============ 资源加载优化 ============
+        // 优先使用 WebView 磁盘缓存（缓存头由 BilupWebViewClient 对静态资源注入），
+        // 避免每次进入编辑器都重新从 APK 读取解压 JS/CSS/素材，显著加快加载速度。
+        settings.setCacheMode(WebSettings.LOAD_CACHE_ELSE_NETWORK);
+    }
+
+    @Override
+    public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        // 系统内存压力较大时主动清理 WebView 磁盘缓存，降低渲染进程被系统回收、
+        // 打开大作品时直接闪退的概率。缓存清理后仅下一次加载稍慢，是可接受的代价。
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
+            clearWebViewCache();
+        }
+    }
+
+    @Override
+    public void onLowMemory() {
+        super.onLowMemory();
+        clearWebViewCache();
+    }
+
+    private void clearWebViewCache() {
+        WebView webView = getBridge() != null ? getBridge().getWebView() : null;
+        if (webView != null) {
+            webView.clearCache(false);
         }
     }
 

@@ -36,6 +36,11 @@ android {
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {
             ignoreAssetsPattern = '!.svn:!.git:!.ds_store:!*.scc:.*:!CVS:!thumbs.db:!picasa.ini:!*~'
+            // 关键静态资源以未压缩形式打包进 APK：
+            // Capacitor 本地服务器每次从 assets 读取文件，压缩存储的文件需先解压
+            // （scratch-gui 的 JS/CSS bundle 达数 MB，解压开销明显），不压缩可显著
+            // 加快编辑器与素材加载速度。代价是 APK 体积略增。
+            noCompress 'js', 'mjs', 'css', 'html', 'json', 'wasm', 'svg', 'txt'
         }
     }
     flavorDimensions "device"
