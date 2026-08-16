@@ -1,0 +1,4 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="accounts_blocked_toast">移动端应用暂不支持登录，如果要使用登录，请前往网页端</string>
+</resources>

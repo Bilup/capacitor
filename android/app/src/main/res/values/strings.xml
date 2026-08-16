@@ -4,4 +4,7 @@
     <string name="title_activity_main">Bilup</string>
     <string name="package_name">com.bilup.app</string>
     <string name="custom_url_scheme">com.bilup.app</string>
+
+    <!-- 拦截跳转到 accounts.bilup.org 时的提示文案 -->
+    <string name="accounts_blocked_toast">Login is not supported in the mobile app yet. Please use the web version to sign in.</string>
 </resources>

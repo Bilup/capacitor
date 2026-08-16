@@ -180,24 +180,25 @@ jobs:
             ${{ runner.os }}-gradle-
         timeout-minutes: 5
 
-      - name: Generate PKCS12 Keystore
+      - name: Restore fixed signing keystore
         run: |
+          # 关键：必须使用仓库内固定的签名密钥（keystore_base64.txt），
+          # 保证所有 Release APK 使用同一签名，用户才能通过覆盖安装升级。
+          # 之前用 keytool -genkeypair 随机生成，导致每次发布签名都不同，
+          # 用户升级安装时报 "签名不一致" 错误。
           rm -f android/app/release.keystore
-          keytool -genkeypair -v -keystore android/app/release.keystore \
-            -alias ${{ secrets.KEY_ALIAS }} \
-            -keyalg RSA -keysize 2048 -validity 10000 \
-            -storepass ${{ secrets.KEYSTORE_PASSWORD }} \
-            -keypass ${{ secrets.KEY_PASSWORD }} \
-            -dname "CN=Bilup, OU=Bilup, O=Bilup, L=Beijing, ST=Beijing, C=CN" \
-            -storetype PKCS12
-        timeout-minutes: 5
+          base64 -d keystore_base64.txt > android/app/release.keystore
+        timeout-minutes: 2
 
       - name: Build Release APK
         env:
           MIN_SDK: ${{ matrix.minSdk }}
-          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
-          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
-          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
+          # 固定密钥信息来自仓库内 release.keystore（keystore_base64.txt 解码）：
+          # alias=bilup, store/key 密码=bilup123（与 signing.gradle 默认值一致）。
+          # 不再从 secrets 读取，避免与固定密钥不匹配导致签名失败或签名漂移。
+          KEYSTORE_PASSWORD: bilup123
+          KEY_ALIAS: bilup
+          KEY_PASSWORD: bilup123
           GRADLE_OPTS: "-Xmx4g -Dorg.gradle.parallel=true -Dorg.gradle.jvmargs=-Xmx4g"
           ANDROID_HOME: ${{ env.ANDROID_HOME }}
         run: |

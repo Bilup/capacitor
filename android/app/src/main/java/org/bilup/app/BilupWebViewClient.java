@@ -58,8 +58,6 @@ public class BilupWebViewClient extends BridgeWebViewClient {
 
     /** 需要拦截的账号域名（含其所有子域名） */
     private static final String BLOCKED_ACCOUNTS_HOST = "accounts.bilup.org";
-    /** 拦截时提示用户的消息 */
-    private static final String BLOCKED_ACCOUNTS_TOAST = "该功能需要登录账号，当前版本已停用账号跳转";
 
     public BilupWebViewClient(Bridge bridge) {
         super(bridge);
@@ -131,6 +129,7 @@ public class BilupWebViewClient extends BridgeWebViewClient {
 
     /**
      * 提示用户跳转已被拦截（切回主线程弹 Toast）。
+     * 文案从资源文件读取，随系统语言自动切换（默认英文，中文见 values-zh-rCN）。
      * 注意不能用 getMainExecutor()：那是 API 28+ 的 API，minSdk=24 的老机器会崩溃。
      */
     private void notifyAccountsBlocked() {
@@ -139,7 +138,8 @@ public class BilupWebViewClient extends BridgeWebViewClient {
         new Handler(Looper.getMainLooper()).post(new Runnable() {
             @Override
             public void run() {
-                Toast.makeText(context, BLOCKED_ACCOUNTS_TOAST, Toast.LENGTH_LONG).show();
+                String message = context.getString(R.string.accounts_blocked_toast);
+                Toast.makeText(context, message, Toast.LENGTH_LONG).show();
             }
         });
     }
