@@ -187,6 +187,8 @@ jobs:
           # 之前用 keytool -genkeypair 随机生成，导致每次发布签名都不同，
           # 用户升级安装时报 "签名不一致" 错误。
           rm -f android/app/release.keystore
+          # 防御：若文件带 UTF-8 BOM，先去掉，否则 base64 -d 会报 invalid input
+          sed -i '1s/^\xEF\xBB\xBF//' keystore_base64.txt
           base64 -d keystore_base64.txt > android/app/release.keystore
         timeout-minutes: 2
 
