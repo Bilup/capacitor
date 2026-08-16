@@ -121,7 +121,32 @@ public final class WebViewEnhancer {
                 "});" +
             "}" +
             "enhanceMenuBar();" +
-            "var observer = new MutationObserver(function() { enhanceMenuBar(); });" +
+            /* 性能优化：MutationObserver 回调做去抖 + 前置过滤。
+               scratch-gui 渲染期 DOM 变更极其频繁，若每个变更都全量 querySelectorAll，
+               会在老机器上造成明显卡顿。这里仅当新增节点确实包含菜单栏元素时才扫描，
+               并且把高频回调聚合到 requestAnimationFrame 去抖，每帧最多执行一次。 */
+            "var _menuTimer = null;" +
+            "function _scheduleMenuEnhance() {" +
+                "if (_menuTimer !== null) return;" +
+                "_menuTimer = requestAnimationFrame(function() {" +
+                    "_menuTimer = null;" +
+                    "enhanceMenuBar();" +
+                "});" +
+            "}" +
+            "var observer = new MutationObserver(function(mutations) {" +
+                "for (var i = 0; i < mutations.length; i++) {" +
+                    "var added = mutations[i].addedNodes;" +
+                    "if (!added || !added.length) continue;" +
+                    "for (var j = 0; j < added.length; j++) {" +
+                        "var n = added[j];" +
+                        "if (n.nodeType !== 1) continue;" +
+                        "var cls = (typeof n.className === 'string') ? n.className : '';" +
+                        "if (cls.indexOf('menuBar') !== -1 || cls.indexOf('menu-bar') !== -1 || cls.indexOf('menuItem') !== -1) {" +
+                            "_scheduleMenuEnhance(); return;" +
+                        "}" +
+                    "}" +
+                "}" +
+            "});" +
             "observer.observe(document.body, { childList: true, subtree: true });" +
 
             /* ========== Blob 下载拦截 ========== */

@@ -92,9 +92,9 @@ jobs:
           retention-days: 1
         timeout-minutes: 5
 
-  # ==================== 2. Build Release APKs (3 version ranges x 2 flavors x 1-2 ABIs, all parallel) ====================
+  # ==================== 2. Build Release APKs (3 version ranges x 1-2 ABIs, all parallel) ====================
   build-apk:
-    name: build-apk (${{ matrix.range }}, ${{ matrix.flavor }}, ${{ matrix.abi }})
+    name: build-apk (${{ matrix.range }}, ${{ matrix.abi }})
     needs: build-gui
     runs-on: ubuntu-latest
     timeout-minutes: 60
@@ -105,45 +105,20 @@ jobs:
           # ---------- Android 7.0-9.0: x86 only ----------
           - range: android-7-9
             minSdk: 24
-            flavor: phone
-            abi: x86
-          - range: android-7-9
-            minSdk: 24
-            flavor: tablet
             abi: x86
           # ---------- Android 10-12: x86 + x86_64 ----------
           - range: android-10-12
             minSdk: 29
-            flavor: phone
             abi: x86
           - range: android-10-12
             minSdk: 29
-            flavor: phone
-            abi: x86_64
-          - range: android-10-12
-            minSdk: 29
-            flavor: tablet
-            abi: x86
-          - range: android-10-12
-            minSdk: 29
-            flavor: tablet
             abi: x86_64
           # ---------- Android 13-16: x86 + x86_64 ----------
           - range: android-13-16
             minSdk: 33
-            flavor: phone
             abi: x86
           - range: android-13-16
             minSdk: 33
-            flavor: phone
-            abi: x86_64
-          - range: android-13-16
-            minSdk: 33
-            flavor: tablet
-            abi: x86
-          - range: android-13-16
-            minSdk: 33
-            flavor: tablet
             abi: x86_64
 
     steps:
@@ -219,7 +194,6 @@ jobs:
 
       - name: Build Release APK
         env:
-          FLAVOR: ${{ matrix.flavor }}
           MIN_SDK: ${{ matrix.minSdk }}
           KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
           KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
@@ -229,9 +203,7 @@ jobs:
         run: |
           cd android
           chmod +x gradlew
-          # Capitalize first letter of flavor (phone→Phone, tablet→Tablet)
-          FLAVOR_CAP="$(echo "${FLAVOR:0:1}" | tr '[:lower:]' '[:upper:]')${FLAVOR:1}"
-          GRADLE_CMD="assemble${FLAVOR_CAP}Release"
+          GRADLE_CMD="assembleDeviceRelease"
           echo "============================================"
           echo "Building: $GRADLE_CMD (minSdk=$MIN_SDK)"
           echo "============================================"
@@ -242,7 +214,6 @@ jobs:
 
       - name: Stage APK by ABI
         env:
-          FLAVOR: ${{ matrix.flavor }}
           ABI: ${{ matrix.abi }}
         run: |
           mkdir -p staged
@@ -253,7 +224,7 @@ jobs:
           else
             ABI_PATTERN="*.apk"
           fi
-          cp android/app/build/outputs/apk/$FLAVOR/release/$ABI_PATTERN staged/
+          cp android/app/build/outputs/apk/device/release/$ABI_PATTERN staged/
           echo "Staged APK(s):"
           ls -la staged/
         timeout-minutes: 2
@@ -261,7 +232,7 @@ jobs:
       - name: Upload Release APK
         uses: actions/upload-artifact@v4
         with:
-          name: Bilup-${{ matrix.range }}-${{ matrix.flavor }}-${{ matrix.abi }}
+          name: Bilup-${{ matrix.range }}-${{ matrix.abi }}
           path: staged/*.apk
           if-no-files-found: error
           retention-days: 30
@@ -313,9 +284,9 @@ jobs:
 
           | Version Range | Flavor | ABI |
           |---------------|--------|-----|
-          | 7.0-9.0 (minSdk=24) | phone / tablet | x86 |
-          | 10-12 (minSdk=29) | phone / tablet | x86, x86_64 |
-          | 13-16 (minSdk=33) | phone / tablet | x86, x86_64 |"
+          | 7.0-9.0 (minSdk=24) | device | x86 |
+          | 10-12 (minSdk=29) | device | x86, x86_64 |
+          | 13-16 (minSdk=33) | device | x86, x86_64 |"
         env:
           GH_TOKEN: "${{ github.token }}"
         timeout-minutes: 10

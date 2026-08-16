@@ -290,6 +290,14 @@ public class MainActivity extends BridgeActivity {
         settings.setAllowContentAccess(true);
         // 允许 JavaScript 通过 window.open() 打开新窗口
         settings.setJavaScriptCanOpenWindowsAutomatically(true);
+
+        // ============ 性能优化（针对老机器） ============
+        // 提高渲染进程优先级：老机器多任务时避免 WebView 渲染被系统回收/降频。
+        // 第二个参数 waivedWhenNotVisible=true：WebView 不可见时自动降级，节省资源。
+        // setRendererPriorityPolicy 仅在 API 26+ 可用
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_HIGH, true);
+        }
     }
 
     private void configureDisplaySettings(WebView webView) {

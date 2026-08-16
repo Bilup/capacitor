@@ -40,22 +40,17 @@ android {
     }
     flavorDimensions "device"
     productFlavors {
-        phone {
+        device {
             dimension "device"
-            applicationIdSuffix ".phone"
-            versionNameSuffix "-phone"
-            buildConfigField "String", "DEVICE_TYPE", "\"phone\""
-        }
-        tablet {
-            dimension "device"
-            applicationIdSuffix ".tablet"
-            versionNameSuffix "-tablet"
-            buildConfigField "String", "DEVICE_TYPE", "\"tablet\""
+            buildConfigField "String", "DEVICE_TYPE", "\"device\""
         }
     }
     buildTypes {
         release {
-            minifyEnabled false
+            // 开启 R8 代码压缩 + 资源压缩：显著减小 APK 体积，
+            // 老机器安装/加载更快、占用存储更少。Keep 规则见 proguard-rules.pro。
+            minifyEnabled true
+            shrinkResources true
             proguardFiles getDefaultProguardFile('proguard-android.txt'), 'proguard-rules.pro'
             signingConfig signingConfigs.release
         }
