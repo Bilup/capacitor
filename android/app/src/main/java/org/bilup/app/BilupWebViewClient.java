@@ -48,7 +48,17 @@ import java.util.regex.Pattern;
  */
 public class BilupWebViewClient extends BridgeWebViewClient {
 
+    /**
+     * 渲染进程消失（崩溃或被系统回收）时的监听器。
+     * 用于通知宿主清理已失效的状态（如文件选择回调 filePathCallback），
+     * 避免后续 onActivityResult 回调到已失效的 WebView 而崩溃。
+     */
+    public interface OnRendererGoneListener {
+        void onRendererGone();
+    }
+
     private final Bridge bridge;
+    private final OnRendererGoneListener rendererGoneListener;
 
     private static final Pattern P_EDITOR = Pattern.compile("^/editor/?$");
     private static final Pattern P_ADDONS = Pattern.compile("^/addons/?$");
@@ -71,8 +81,13 @@ public class BilupWebViewClient extends BridgeWebViewClient {
     private static final String STATIC_ASSET_CACHE_CONTROL = "public, max-age=604800, immutable";
 
     public BilupWebViewClient(Bridge bridge) {
+        this(bridge, null);
+    }
+
+    public BilupWebViewClient(Bridge bridge, OnRendererGoneListener listener) {
         super(bridge);
         this.bridge = bridge;
+        this.rendererGoneListener = listener;
     }
 
     /**
@@ -216,33 +231,45 @@ public class BilupWebViewClient extends BridgeWebViewClient {
     }
 
     /**
-     * 处理 WebView 渲染进程崩溃（通常由打开大作品时的内存不足引起）。
+     * 处理 WebView 渲染进程消失（崩溃或被系统回收）。
      * <p>
-     * 默认行为是直接终止应用（表现为闪退）。这里接管崩溃事件，尝试恢复：
+     * 默认行为（返回 false）会让系统直接终止应用，表现为闪退。这里统一接管：
      * <ol>
-     *   <li>首次崩溃：主动清理缓存与渲染资源，再重新加载当前页面，把"闪退"
-     *       降级为"重新加载"。</li>
-     *   <li>短时间内反复崩溃（大概率是大作品持续 OOM，重载无意义）：不再自动
-     *       重载，避免"打开→崩溃→重启→再崩溃"的死循环，改为提示用户重启应用。</li>
+     *   <li><b>didCrash() == true</b>（渲染进程崩溃，通常由打开大作品 OOM 引起）：
+     *       首次崩溃清理缓存后重载页面，把"闪退"降级为"重新加载"；短时间反复
+     *       崩溃（持续 OOM）则放弃重载并提示用户，避免"崩溃→重载→再崩溃"死循环。</li>
+     *   <li><b>didCrash() == false</b>（渲染进程被系统回收，常见于打开系统文件
+     *       选择器、多任务切换等后台场景）：默认行为同样会杀应用。这里也接管并
+     *       重载，保证用户从文件选择器返回后应用仍然存活。</li>
      * </ol>
-     * 仅在渲染进程确实崩溃时处理，系统主动回收（didCrash() == false）时交给默认逻辑。
+     * 无论哪种情况，都会在恢复前通知宿主清理已失效的状态（如文件选择回调），
+     * 避免 onActivityResult 回调到失效 WebView 引发崩溃。
      */
     @Override
     public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
-                && detail != null && detail.didCrash()) {
+                && detail != null) {
             long now = SystemClock.elapsedRealtime();
             if (now - lastRenderCrashTime < RENDER_CRASH_THROTTLE_MS) {
-                // 短时间内再次崩溃：说明是持续性的内存不足，自动重载只会死循环
+                // 短时间内再次消失：说明是持续性的内存不足，自动重载只会死循环
                 renderCrashCount++;
             } else {
-                // 距上次崩溃已过较久，视为一次新的崩溃事件
+                // 距上次消失已过较久，视为一次新的事件
                 renderCrashCount = 1;
             }
             lastRenderCrashTime = now;
 
+            // 先通知宿主清理失效状态（文件选择回调等），防止后续崩溃
+            if (rendererGoneListener != null) {
+                try {
+                    rendererGoneListener.onRendererGone();
+                } catch (Exception ignored) {
+                    // 宿主清理失败不影响恢复流程
+                }
+            }
+
             if (renderCrashCount >= MAX_RENDER_CRASHES_BEFORE_GIVE_UP) {
-                // 连续崩溃：放弃自动重载，提示用户，避免无限重启
+                // 连续消失：放弃自动重载，提示用户，避免无限重启
                 notifyCrashTooManyTimes();
                 return true;
             }
@@ -255,11 +282,10 @@ public class BilupWebViewClient extends BridgeWebViewClient {
                     try {
                         if (targetView != null) {
                             // 重载前主动释放内存：清理磁盘缓存 + 渲染进程相关资源。
-                            // 渲染进程已崩溃，页面状态无法保留，但清理缓存可降低重载时的
+                            // 渲染进程已消失，页面状态无法保留，但清理缓存可降低重载时的
                             // 内存/IO 峰值，提高恢复成功率。
                             targetView.clearCache(true);
-                            // 重新加载前销毁旧的 WebView 以彻底释放其渲染资源
-                            // （重载同一 WebView 不会释放已崩溃渲染进程的全部资源）
+                            // 重新加载当前页面，让应用恢复到可用状态
                             targetView.loadUrl(url != null ? url : bridge.getServerUrl());
                         }
                     } catch (Exception ignored) {

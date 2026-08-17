@@ -35,7 +35,32 @@ public class MainActivity extends BridgeActivity {
         // 用自定义 WebViewClient 修复 wildcard 页面路由（/editor、/addons、/player 等），
         // 避免被 Capacitor 的 html5mode 错误回退到 index.html
         if (getBridge() != null) {
-            getBridge().setWebViewClient(new BilupWebViewClient(getBridge()));
+            getBridge().setWebViewClient(new BilupWebViewClient(getBridge(), new BilupWebViewClient.OnRendererGoneListener() {
+                @Override
+                public void onRendererGone() {
+                    // 渲染进程消失后，旧的 filePathCallback 已指向失效的 WebView。
+                    // 必须立即清理，否则用户从系统文件选择器返回时 onActivityResult
+                    // 会调用这个失效回调，抛出 IllegalStateException 导致应用崩溃。
+                    clearFilePathCallback();
+                }
+            }));
+        }
+    }
+
+    /**
+     * 清理挂起的文件选择回调。
+     * 在 WebView 渲染进程消失、Activity 销毁等 WebView 不再可用的场景调用，
+     * 防止 onActivityResult 回调到已失效的 WebView。
+     */
+    private void clearFilePathCallback() {
+        if (filePathCallback != null) {
+            try {
+                // 传 null 表示"用户取消选择"，WebView 侧会安全处理
+                filePathCallback.onReceiveValue(null);
+            } catch (Exception ignored) {
+                // 回调已失效时忽略，避免崩溃
+            }
+            filePathCallback = null;
         }
     }
 
@@ -63,6 +88,14 @@ public class MainActivity extends BridgeActivity {
                 new FileDownloadHelper(MainActivity.this, webView).setupDownloadListener();
             }
         });
+    }
+
+    @Override
+    protected void onDestroy() {
+        // Activity 销毁（含系统低内存回收、配置变化重建）前清理挂起的文件选择回调，
+        // 防止 onActivityResult 回调到已销毁的 WebView/Activity 实例而崩溃。
+        clearFilePathCallback();
+        super.onDestroy();
     }
 
     /**
@@ -199,10 +232,17 @@ public class MainActivity extends BridgeActivity {
             public boolean onShowFileChooser(WebView webView,
                                              ValueCallback<Uri[]> callback,
                                              FileChooserParams fileChooserParams) {
-                // 若上一次选择尚未回调，先通知取消，避免 WebView 收到重复回调
-                if (MainActivity.this.filePathCallback != null) {
-                    MainActivity.this.filePathCallback.onReceiveValue(null);
+                // WebView 已销毁/不可用时直接通知取消，避免启动一个注定失败的选择器
+                if (webView == null || webView.isDestroyed()) {
+                    try {
+                        callback.onReceiveValue(null);
+                    } catch (Exception ignored) {
+                        // 忽略，回调已失效
+                    }
+                    return false;
                 }
+                // 若上一次选择尚未回调，先安全取消，避免 WebView 收到重复回调
+                clearFilePathCallback();
                 MainActivity.this.filePathCallback = callback;
 
                 Intent intent = fileChooserParams.createIntent();
@@ -216,10 +256,7 @@ public class MainActivity extends BridgeActivity {
                     startActivityForResult(intent, REQUEST_CODE_FILE_CHOOSER);
                 } catch (Exception e) {
                     // 无法打开文件选择器时通知前端失败
-                    if (MainActivity.this.filePathCallback != null) {
-                        MainActivity.this.filePathCallback.onReceiveValue(null);
-                        MainActivity.this.filePathCallback = null;
-                    }
+                    clearFilePathCallback();
                     return false;
                 }
                 return true;
@@ -257,22 +294,41 @@ public class MainActivity extends BridgeActivity {
                 super.onActivityResult(requestCode, resultCode, data);
                 return;
             }
+            // WebView 已销毁（渲染进程 gone / Activity 重建等）时回调已失效，
+            // 此时绝不能调用 onReceiveValue，否则 IllegalStateException 崩溃。
+            // 安全清理后返回即可（前端会因收不到结果而正常处理）。
+            WebView currentWebView = getBridge() != null ? getBridge().getWebView() : null;
+            if (currentWebView == null || currentWebView.isDestroyed()) {
+                clearFilePathCallback();
+                return;
+            }
             Uri[] results = null;
             if (resultCode == RESULT_OK && data != null) {
-                if (data.getData() != null) {
-                    // 单个文件
-                    results = new Uri[]{data.getData()};
-                } else if (data.getClipData() != null) {
-                    // 多个文件
-                    int count = data.getClipData().getItemCount();
-                    results = new Uri[count];
-                    for (int i = 0; i < count; i++) {
-                        results[i] = data.getClipData().getItemAt(i).getUri();
+                try {
+                    if (data.getData() != null) {
+                        // 单个文件
+                        results = new Uri[]{data.getData()};
+                    } else if (data.getClipData() != null) {
+                        // 多个文件
+                        int count = data.getClipData().getItemCount();
+                        results = new Uri[count];
+                        for (int i = 0; i < count; i++) {
+                            results[i] = data.getClipData().getItemAt(i).getUri();
+                        }
                     }
+                } catch (Exception e) {
+                    // 读取 URI 失败时按取消处理，避免崩溃
+                    clearFilePathCallback();
+                    return;
                 }
             }
-            filePathCallback.onReceiveValue(results);
+            ValueCallback<Uri[]> callback = filePathCallback;
             filePathCallback = null;
+            try {
+                callback.onReceiveValue(results);
+            } catch (Exception ignored) {
+                // 回调抛异常时忽略，避免应用崩溃（WebView 侧会自行处理取消）
+            }
             return;
         }
         super.onActivityResult(requestCode, resultCode, data);

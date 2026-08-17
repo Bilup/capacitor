@@ -40,7 +40,13 @@ public final class WebViewEnhancer {
             "}" +
         "})();";
 
-        webView.evaluateJavascript(jsCode, null);
+        try {
+            if (webView != null && !webView.isDestroyed()) {
+                webView.evaluateJavascript(jsCode, null);
+            }
+        } catch (Exception ignored) {
+            // WebView 已销毁或注入失败时静默忽略，不影响主流程
+        }
     }
 
     /**
@@ -201,6 +207,12 @@ public final class WebViewEnhancer {
             "}, true);" +
         "})();";
 
-        webView.evaluateJavascript(jsCode, null);
+        try {
+            if (webView != null && !webView.isDestroyed()) {
+                webView.evaluateJavascript(jsCode, null);
+            }
+        } catch (Exception ignored) {
+            // WebView 已销毁或注入失败时静默忽略，不影响主流程
+        }
     }
 }

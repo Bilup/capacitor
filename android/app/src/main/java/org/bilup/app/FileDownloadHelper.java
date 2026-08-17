@@ -93,17 +93,21 @@ public class FileDownloadHelper {
                         ((android.app.Activity) context).runOnUiThread(new Runnable() {
                             @Override
                             public void run() {
-                                if (fileUri != null) {
-                                    // 打开文件位置预览
-                                    openFileLocation(fileUri, fMime);
-                                    // JS 回调通知前端保存完成
-                                    notifyJSSaveComplete(fName);
-                                    Toast.makeText(context,
-                                            "已保存到 下载/Bilup/" + fName,
-                                            Toast.LENGTH_LONG).show();
-                                } else {
-                                    Toast.makeText(context,
-                                            "文件保存失败", Toast.LENGTH_LONG).show();
+                                try {
+                                    if (fileUri != null) {
+                                        // 打开文件位置预览
+                                        openFileLocation(fileUri, fMime);
+                                        // JS 回调通知前端保存完成
+                                        notifyJSSaveComplete(fName);
+                                        Toast.makeText(context,
+                                                "已保存到 下载/Bilup/" + fName,
+                                                Toast.LENGTH_LONG).show();
+                                    } else {
+                                        Toast.makeText(context,
+                                                "文件保存失败", Toast.LENGTH_LONG).show();
+                                    }
+                                } catch (Exception e) {
+                                    Log.e(TAG, "Save UI update failed", e);
                                 }
                             }
                         });
@@ -121,10 +125,20 @@ public class FileDownloadHelper {
         String safeName = (fileName != null ? fileName : "project.sb3").replace("'", "\\'");
         String safeMime = (mimeType != null ? mimeType : "application/octet-stream").replace("'", "\\'");
 
+        // 与 Java 侧 MAX_BASE64_LENGTH（140MB base64 ≈ 100MB 原始数据）保持一致。
+        // 在 readAsDataURL 之前预检大小：若超限直接放弃，避免 base64 字符串
+        // （膨胀约 33%）在 JS 堆中就 OOM，导致渲染进程崩溃。
         String js = "(function() {" +
             "var url = '" + safeUrl + "';" +
             "var cached = (window._bilupBlobMap && window._bilupBlobMap[url]);" +
+            "var MAX_BYTES = 100 * 1024 * 1024;" +
             "function saveBlob(b) {" +
+                "if (b.size > MAX_BYTES) {" +
+                    "console.error('File too large for mobile save (>100MB):', b.size);" +
+                    "try { BilupFileBridge.saveBlob('', '" + safeName + "', '" + safeMime + "'); }" +
+                    "catch(e) {}" +
+                    "return;" +
+                "}" +
                 "var reader = new FileReader();" +
                 "reader.onloadend = function() {" +
                     "var base64 = reader.result.split(',')[1];" +
@@ -142,8 +156,21 @@ public class FileDownloadHelper {
         "})();";
 
         Log.d(TAG, "Injecting blob download JS for: " + safeName);
-        webView.evaluateJavascript(js, null);
+        try {
+            if (!webView.isDestroyed()) {
+                webView.evaluateJavascript(js, null);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "Blob download JS injection failed", e);
+        }
     }
+
+    /**
+     * 单个文件允许下载的最大字节数（约 200MB）。
+     * 超过该大小的文件放弃下载，避免 ByteArrayOutputStream 全量读入内存时
+     * 抛 OutOfMemoryError（不是 Exception，若漏掉会直接崩溃应用）。
+     */
+    private static final long MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024L;
 
     /**
      * 处理普通 URL 下载，保存到公共 Download/Bilup/ 目录。
@@ -153,8 +180,9 @@ public class FileDownloadHelper {
     private Uri handleRegularDownload(String fileUrl, String fileName, String mimeType) {
         try {
             return downloadToPublicStorage(fileUrl, fileName, mimeType);
-        } catch (Exception e) {
-            Log.e(TAG, "Download failed: " + fileName, e);
+        } catch (Throwable t) {
+            // 捕获 Throwable：大文件下载时可能抛 OutOfMemoryError，必须兜住
+            Log.e(TAG, "Download failed: " + fileName, t);
             return null;
         }
     }
@@ -178,7 +206,9 @@ public class FileDownloadHelper {
     }
 
     /**
-     * 从 URL 下载完整的字节数据
+     * 从 URL 下载完整的字节数据。
+     * 下载过程中持续校验大小，超过 MAX_DOWNLOAD_BYTES 立即中止，
+     * 避免超大文件把内存耗尽（OOM）崩溃应用。
      */
     private byte[] downloadBytes(String fileUrl) throws Exception {
         URL url = new URL(fileUrl);
@@ -188,11 +218,23 @@ public class FileDownloadHelper {
         conn.setReadTimeout(30000);
         conn.connect();
 
+        // 服务器声明了 Content-Length 时提前拦截超大文件
+        long contentLength = conn.getContentLengthLong();
+        if (contentLength > MAX_DOWNLOAD_BYTES) {
+            conn.disconnect();
+            throw new IOException("文件过大，无法下载（超过 200MB）");
+        }
+
         try (InputStream input = conn.getInputStream()) {
             java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
             byte[] buffer = new byte[8192];
             int len;
+            long total = 0;
             while ((len = input.read(buffer)) != -1) {
+                total += len;
+                if (total > MAX_DOWNLOAD_BYTES) {
+                    throw new IOException("文件过大，无法下载（超过 200MB）");
+                }
                 baos.write(buffer, 0, len);
             }
             return baos.toByteArray();
@@ -285,6 +327,12 @@ public class FileDownloadHelper {
             + "});"
             + "document.dispatchEvent(e);"
             + "})();";
-        webView.evaluateJavascript(js, null);
+        try {
+            if (!webView.isDestroyed()) {
+                webView.evaluateJavascript(js, null);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "JS save complete callback failed", e);
+        }
     }
 }

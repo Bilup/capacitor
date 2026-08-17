@@ -64,6 +64,14 @@ public class BlobReceiver {
         return cleaned;
     }
 
+    /**
+     * 单个文件允许的最大 base64 长度（约 100MB 原始数据）。
+     * base64 字符串经 JavascriptInterface 桥接会同时存在于 JS 堆、桥接层、Java 堆，
+     * 加上 Base64.decode 产生的 byte[]，超大数据会直接 OOM（OutOfMemoryError 不是
+     * Exception，不会被 try/catch 捕获，会直接崩溃应用）。因此必须在上游限制。
+     */
+    private static final long MAX_BASE64_LENGTH = 140 * 1024 * 1024L; // 约 100MB 原始数据
+
     @JavascriptInterface
     public void saveBlob(String base64Data, String fileName, String mimeType) {
         String safeName = sanitizeFileName(fileName);
@@ -76,6 +84,9 @@ public class BlobReceiver {
             if (base64Data == null || base64Data.isEmpty()) {
                 throw new IllegalArgumentException("base64Data is null or empty");
             }
+            if (base64Data.length() > MAX_BASE64_LENGTH) {
+                throw new IOException("文件过大，无法在移动端保存（超过 100MB）");
+            }
             byte[] data = Base64.decode(base64Data, Base64.DEFAULT);
             if (data.length == 0) {
                 throw new IOException("解码后数据为空");
@@ -87,8 +98,10 @@ public class BlobReceiver {
             notifySaveSuccess(fileUri, safeName, safeMime);
 
             Log.i(TAG, "Save SUCCESS: " + safeName);
-        } catch (Exception e) {
-            Log.e(TAG, "Save FAILED: " + safeName, e);
+        } catch (Throwable t) {
+            // 必须捕获 Throwable（而非仅 Exception）：大文件解码时可能抛
+            // OutOfMemoryError，若漏掉会直接导致应用崩溃
+            Log.e(TAG, "Save FAILED: " + safeName, t);
             notifySaveFailed(safeName);
         }
     }
@@ -192,15 +205,21 @@ public class BlobReceiver {
                 openFileLocation(fileUri, mimeType);
 
                 // 2. JS 回调：通知前端保存完成（携带可展示的路径）
-                String jsCallback = "javascript:(function(){"
-                    + "var e = new CustomEvent('bilupSaveComplete', {"
-                    + "  detail: { fileName: '" + fileName.replace("'", "\\'") + "', path: '" +
-                    ("下载/Bilup/" + fileName).replace("'", "\\'") + "' }"
-                    + "});"
-                    + "document.dispatchEvent(e);"
-                    + "})();";
-                if (webView != null) {
-                    webView.evaluateJavascript(jsCallback, null);
+                // WebView 可能已被销毁（如用户保存后立即关闭页面），
+                // evaluateJavascript 会抛 IllegalStateException，必须保护
+                try {
+                    String jsCallback = "javascript:(function(){"
+                        + "var e = new CustomEvent('bilupSaveComplete', {"
+                        + "  detail: { fileName: '" + fileName.replace("'", "\\'") + "', path: '" +
+                        ("下载/Bilup/" + fileName).replace("'", "\\'") + "' }"
+                        + "});"
+                        + "document.dispatchEvent(e);"
+                        + "})();";
+                    if (webView != null && !webView.isDestroyed()) {
+                        webView.evaluateJavascript(jsCallback, null);
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "JS callback failed", e);
                 }
 
                 // 3. Toast 提示
@@ -225,14 +244,19 @@ public class BlobReceiver {
             @Override
             public void run() {
                 // 1. JS 回调：通知前端保存失败
-                String jsCallback = "javascript:(function(){"
-                    + "var e = new CustomEvent('bilupSaveFailed', {"
-                    + "  detail: { fileName: '" + fileName.replace("'", "\\'") + "' }"
-                    + "});"
-                    + "document.dispatchEvent(e);"
-                    + "})();";
-                if (webView != null) {
-                    webView.evaluateJavascript(jsCallback, null);
+                // WebView 可能已被销毁，必须保护（见 notifySaveSuccess 注释）
+                try {
+                    String jsCallback = "javascript:(function(){"
+                        + "var e = new CustomEvent('bilupSaveFailed', {"
+                        + "  detail: { fileName: '" + fileName.replace("'", "\\'") + "' }"
+                        + "});"
+                        + "document.dispatchEvent(e);"
+                        + "})();";
+                    if (webView != null && !webView.isDestroyed()) {
+                        webView.evaluateJavascript(jsCallback, null);
+                    }
+                } catch (Exception e) {
+                    Log.w(TAG, "JS callback failed", e);
                 }
 
                 // 2. Toast
