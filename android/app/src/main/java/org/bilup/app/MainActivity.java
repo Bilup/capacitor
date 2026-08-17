@@ -319,8 +319,10 @@ public class MainActivity extends BridgeActivity {
         if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
             WebView webView = getBridge() != null ? getBridge().getWebView() : null;
             if (webView != null) {
-                // 让 WebView 按当前内存压力等级自行回收渲染进程内存
-                webView.onTrimMemory(level);
+                // 让 WebView 按当前内存压力等级自行回收渲染进程内存。
+                // WebView 实现了 ComponentCallbacks2，但 onTrimMemory 未直接暴露，
+                // 需通过接口引用调用。
+                ((ComponentCallbacks2) webView).onTrimMemory(level);
             }
         }
         // 仅在严重内存压力（RUNNING_LOW 及以上）时清理磁盘缓存，避免频繁清缓存
@@ -336,7 +338,7 @@ public class MainActivity extends BridgeActivity {
         // 极低内存：同时让 WebView 回收渲染进程内存并清理磁盘缓存
         WebView webView = getBridge() != null ? getBridge().getWebView() : null;
         if (webView != null) {
-            webView.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_COMPLETE);
+            ((ComponentCallbacks2) webView).onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_COMPLETE);
             webView.clearCache(false);
         }
     }
