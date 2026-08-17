@@ -310,8 +310,21 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onTrimMemory(int level) {
         super.onTrimMemory(level);
-        // 系统内存压力较大时主动清理 WebView 磁盘缓存，降低渲染进程被系统回收、
-        // 打开大作品时直接闪退的概率。缓存清理后仅下一次加载稍慢，是可接受的代价。
+        // 系统内存压力较大时主动回收 WebView 内存，降低渲染进程被系统回收、
+        // 打开大作品时直接闪退/崩溃的概率。
+        //
+        // 磁盘缓存清理只影响二次加载速度，对"渲染进程当前占用"没有直接帮助；
+        // 真正能缓解大作品 OOM 的是调用 WebView.onTrimMemory()，它会引导渲染
+        // 进程释放可回收的内存（如图片缓存、GPU 纹理、JS 堆空闲内存）。
+        if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
+            WebView webView = getBridge() != null ? getBridge().getWebView() : null;
+            if (webView != null) {
+                // 让 WebView 按当前内存压力等级自行回收渲染进程内存
+                webView.onTrimMemory(level);
+            }
+        }
+        // 仅在严重内存压力（RUNNING_LOW 及以上）时清理磁盘缓存，避免频繁清缓存
+        // 拖慢后续加载。缓存是下次加载的资源，对当前大作品加载的内存峰值帮助有限。
         if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
             clearWebViewCache();
         }
@@ -320,7 +333,12 @@ public class MainActivity extends BridgeActivity {
     @Override
     public void onLowMemory() {
         super.onLowMemory();
-        clearWebViewCache();
+        // 极低内存：同时让 WebView 回收渲染进程内存并清理磁盘缓存
+        WebView webView = getBridge() != null ? getBridge().getWebView() : null;
+        if (webView != null) {
+            webView.onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_COMPLETE);
+            webView.clearCache(false);
+        }
     }
 
     private void clearWebViewCache() {

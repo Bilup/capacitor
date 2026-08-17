@@ -1,4 +1,5 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
     <string name="accounts_blocked_toast">移动端应用暂不支持登录，如果要使用登录，请前往网页端</string>
+    <string name="render_crash_too_many_toast">打开该作品时应用内存不足。请关闭一些后台应用后重试，或重启应用</string>
 </resources>

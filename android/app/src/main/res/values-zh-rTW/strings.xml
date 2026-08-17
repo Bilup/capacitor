@@ -1,4 +1,5 @@
 <?xml version='1.0' encoding='utf-8'?>
 <resources>
     <string name="accounts_blocked_toast">行動裝置應用程式暫不支援登入，如需登入請前往網頁版</string>
+    <string name="render_crash_too_many_toast">開啟此作品時應用程式記憶體不足。請關閉一些背景應用後重試，或重新啟動應用程式</string>
 </resources>

@@ -7,4 +7,7 @@
 
     <!-- 拦截跳转到 accounts.bilup.org 时的提示文案 -->
     <string name="accounts_blocked_toast">Login is not supported in the mobile app yet. Please use the web version to sign in.</string>
+
+    <!-- 渲染进程连续崩溃（打开大作品 OOM）时提示重启应用 -->
+    <string name="render_crash_too_many_toast">The app ran out of memory while opening this project. Please close some background apps and try again, or restart the app.</string>
 </resources>

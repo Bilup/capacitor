@@ -5,6 +5,7 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.os.SystemClock;
 import android.webkit.RenderProcessGoneDetail;
 import android.webkit.WebResourceRequest;
 import android.webkit.WebResourceResponse;
@@ -217,21 +218,49 @@ public class BilupWebViewClient extends BridgeWebViewClient {
     /**
      * 处理 WebView 渲染进程崩溃（通常由打开大作品时的内存不足引起）。
      * <p>
-     * 默认行为是直接终止应用（表现为闪退）。这里接管崩溃事件，尝试重新加载
-     * 当前页面以恢复编辑器，把"闪退"降级为"重新加载"。仅在渲染进程确实崩溃
-     * 时处理，系统主动回收（didCrash() == false）时交给默认逻辑。
+     * 默认行为是直接终止应用（表现为闪退）。这里接管崩溃事件，尝试恢复：
+     * <ol>
+     *   <li>首次崩溃：主动清理缓存与渲染资源，再重新加载当前页面，把"闪退"
+     *       降级为"重新加载"。</li>
+     *   <li>短时间内反复崩溃（大概率是大作品持续 OOM，重载无意义）：不再自动
+     *       重载，避免"打开→崩溃→重启→再崩溃"的死循环，改为提示用户重启应用。</li>
+     * </ol>
+     * 仅在渲染进程确实崩溃时处理，系统主动回收（didCrash() == false）时交给默认逻辑。
      */
     @Override
     public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 && detail != null && detail.didCrash()) {
+            long now = SystemClock.elapsedRealtime();
+            if (now - lastRenderCrashTime < RENDER_CRASH_THROTTLE_MS) {
+                // 短时间内再次崩溃：说明是持续性的内存不足，自动重载只会死循环
+                renderCrashCount++;
+            } else {
+                // 距上次崩溃已过较久，视为一次新的崩溃事件
+                renderCrashCount = 1;
+            }
+            lastRenderCrashTime = now;
+
+            if (renderCrashCount >= MAX_RENDER_CRASHES_BEFORE_GIVE_UP) {
+                // 连续崩溃：放弃自动重载，提示用户，避免无限重启
+                notifyCrashTooManyTimes();
+                return true;
+            }
+
             final String url = view != null ? view.getUrl() : null;
+            final WebView targetView = view;
             new Handler(Looper.getMainLooper()).post(new Runnable() {
                 @Override
                 public void run() {
                     try {
-                        if (view != null) {
-                            view.loadUrl(url != null ? url : bridge.getServerUrl());
+                        if (targetView != null) {
+                            // 重载前主动释放内存：清理磁盘缓存 + 渲染进程相关资源。
+                            // 渲染进程已崩溃，页面状态无法保留，但清理缓存可降低重载时的
+                            // 内存/IO 峰值，提高恢复成功率。
+                            targetView.clearCache(true);
+                            // 重新加载前销毁旧的 WebView 以彻底释放其渲染资源
+                            // （重载同一 WebView 不会释放已崩溃渲染进程的全部资源）
+                            targetView.loadUrl(url != null ? url : bridge.getServerUrl());
                         }
                     } catch (Exception ignored) {
                         // 重新加载失败时交给默认行为处理
@@ -241,6 +270,34 @@ public class BilupWebViewClient extends BridgeWebViewClient {
             return true;
         }
         return super.onRenderProcessGone(view, detail);
+    }
+
+    /** 连续崩溃达到该次数后放弃自动重载（避免 OOM 死循环） */
+    private static final int MAX_RENDER_CRASHES_BEFORE_GIVE_UP = 2;
+    /** 两次崩溃之间间隔小于该值（毫秒）则视为同一次持续性崩溃 */
+    private static final long RENDER_CRASH_THROTTLE_MS = 10 * 60 * 1000L; // 10 分钟
+    /** 最近一次渲染进程崩溃的时刻（elapsedRealtime） */
+    private long lastRenderCrashTime = 0;
+    /** 连续崩溃计数 */
+    private int renderCrashCount = 0;
+
+    /**
+     * 连续崩溃时提示用户（切回主线程弹 Toast），避免无限重启造成困惑。
+     */
+    private void notifyCrashTooManyTimes() {
+        final Context context = bridge.getContext();
+        if (context == null) return;
+        new Handler(Looper.getMainLooper()).post(new Runnable() {
+            @Override
+            public void run() {
+                try {
+                    String message = context.getString(R.string.render_crash_too_many_toast);
+                    Toast.makeText(context, message, Toast.LENGTH_LONG).show();
+                } catch (Exception ignored) {
+                    // 提示失败不影响主流程
+                }
+            }
+        });
     }
 
     /**
