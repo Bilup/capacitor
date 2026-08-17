@@ -215,7 +215,7 @@ public class BlobReceiver {
                         + "});"
                         + "document.dispatchEvent(e);"
                         + "})();";
-                    if (webView != null && !webView.isDestroyed()) {
+                    if (WebViewEnhancer.isAlive(webView)) {
                         webView.evaluateJavascript(jsCallback, null);
                     }
                 } catch (Exception e) {
@@ -252,7 +252,7 @@ public class BlobReceiver {
                         + "});"
                         + "document.dispatchEvent(e);"
                         + "})();";
-                    if (webView != null && !webView.isDestroyed()) {
+                    if (WebViewEnhancer.isAlive(webView)) {
                         webView.evaluateJavascript(jsCallback, null);
                     }
                 } catch (Exception e) {

@@ -20,6 +20,7 @@ import androidx.core.content.FileProvider;
 
 import java.io.File;
 import java.io.FileOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.net.HttpURLConnection;
@@ -157,7 +158,7 @@ public class FileDownloadHelper {
 
         Log.d(TAG, "Injecting blob download JS for: " + safeName);
         try {
-            if (!webView.isDestroyed()) {
+            if (WebViewEnhancer.isAlive(webView)) {
                 webView.evaluateJavascript(js, null);
             }
         } catch (Exception e) {
@@ -328,7 +329,7 @@ public class FileDownloadHelper {
             + "document.dispatchEvent(e);"
             + "})();";
         try {
-            if (!webView.isDestroyed()) {
+            if (WebViewEnhancer.isAlive(webView)) {
                 webView.evaluateJavascript(js, null);
             }
         } catch (Exception e) {

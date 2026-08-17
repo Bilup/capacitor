@@ -91,7 +91,7 @@ public class MainActivity extends BridgeActivity {
     }
 
     @Override
-    protected void onDestroy() {
+    public void onDestroy() {
         // Activity 销毁（含系统低内存回收、配置变化重建）前清理挂起的文件选择回调，
         // 防止 onActivityResult 回调到已销毁的 WebView/Activity 实例而崩溃。
         clearFilePathCallback();
@@ -233,7 +233,7 @@ public class MainActivity extends BridgeActivity {
                                              ValueCallback<Uri[]> callback,
                                              FileChooserParams fileChooserParams) {
                 // WebView 已销毁/不可用时直接通知取消，避免启动一个注定失败的选择器
-                if (webView == null || webView.isDestroyed()) {
+                if (!WebViewEnhancer.isAlive(webView)) {
                     try {
                         callback.onReceiveValue(null);
                     } catch (Exception ignored) {
@@ -298,7 +298,7 @@ public class MainActivity extends BridgeActivity {
             // 此时绝不能调用 onReceiveValue，否则 IllegalStateException 崩溃。
             // 安全清理后返回即可（前端会因收不到结果而正常处理）。
             WebView currentWebView = getBridge() != null ? getBridge().getWebView() : null;
-            if (currentWebView == null || currentWebView.isDestroyed()) {
+            if (!WebViewEnhancer.isAlive(currentWebView)) {
                 clearFilePathCallback();
                 return;
             }

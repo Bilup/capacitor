@@ -14,6 +14,27 @@ public final class WebViewEnhancer {
     }
 
     /**
+     * 判断 WebView 是否仍可安全使用。
+     * <p>
+     * {@link WebView#isDestroyed()} 是 API 26+ 才公开的方法，而本应用
+     * minSdk=24，直接调用会编译失败。这里通过反射调用：方法存在（API 26+）
+     * 则返回真实状态，不存在（API 24/25）则视为可用，由外层 try-catch 兜底。
+     *
+     * @param webView 目标 WebView，可为 null
+     * @return true 表示可安全使用；false 表示已销毁或不可用
+     */
+    public static boolean isAlive(WebView webView) {
+        if (webView == null) return false;
+        try {
+            java.lang.reflect.Method m = WebView.class.getMethod("isDestroyed");
+            return !((Boolean) m.invoke(webView));
+        } catch (Exception e) {
+            // API 24/25 无该方法，或调用失败，视为可用（外层 try-catch 兜底）
+            return true;
+        }
+    }
+
+    /**
      * 注入 viewport meta 标签 — 在 onPageLoaded 中调用（此时窗口尺寸已准确）
      */
     public static void injectViewportMeta(WebView webView) {
@@ -41,7 +62,7 @@ public final class WebViewEnhancer {
         "})();";
 
         try {
-            if (webView != null && !webView.isDestroyed()) {
+            if (isAlive(webView)) {
                 webView.evaluateJavascript(jsCode, null);
             }
         } catch (Exception ignored) {
@@ -208,7 +229,7 @@ public final class WebViewEnhancer {
         "})();";
 
         try {
-            if (webView != null && !webView.isDestroyed()) {
+            if (isAlive(webView)) {
                 webView.evaluateJavascript(jsCode, null);
             }
         } catch (Exception ignored) {
