@@ -8,6 +8,7 @@ import android.content.pm.PackageManager;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.util.Log;
 import android.webkit.JsPromptResult;
 import android.webkit.JsResult;
 import android.webkit.ValueCallback;
@@ -23,6 +24,7 @@ import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.WebViewListener;
 
 public class MainActivity extends BridgeActivity {
+    private static final String TAG = "BilupMainActivity";
     private static final String DEVICE_TYPE_PHONE = "phone";
     private static final int REQUEST_CODE_STORAGE_PERMISSION = 100;
     private static final int REQUEST_CODE_FILE_CHOOSER = 200;
@@ -373,13 +375,7 @@ public class MainActivity extends BridgeActivity {
         // 真正能缓解大作品 OOM 的是调用 WebView.onTrimMemory()，它会引导渲染
         // 进程释放可回收的内存（如图片缓存、GPU 纹理、JS 堆空闲内存）。
         if (level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) {
-            WebView webView = getBridge() != null ? getBridge().getWebView() : null;
-            if (webView != null) {
-                // 让 WebView 按当前内存压力等级自行回收渲染进程内存。
-                // WebView 实现了 ComponentCallbacks2，但 onTrimMemory 未直接暴露，
-                // 需通过接口引用调用。
-                ((ComponentCallbacks2) webView).onTrimMemory(level);
-            }
+            trimWebViewMemory(level);
         }
         // 仅在严重内存压力（RUNNING_LOW 及以上）时清理磁盘缓存，避免频繁清缓存
         // 拖慢后续加载。缓存是下次加载的资源，对当前大作品加载的内存峰值帮助有限。
@@ -392,17 +388,36 @@ public class MainActivity extends BridgeActivity {
     public void onLowMemory() {
         super.onLowMemory();
         // 极低内存：同时让 WebView 回收渲染进程内存并清理磁盘缓存
-        WebView webView = getBridge() != null ? getBridge().getWebView() : null;
-        if (webView != null) {
-            ((ComponentCallbacks2) webView).onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_COMPLETE);
-            webView.clearCache(false);
+        trimWebViewMemory(ComponentCallbacks2.TRIM_MEMORY_COMPLETE);
+        clearWebViewCache();
+    }
+
+    /**
+     * 让 WebView 按指定等级回收渲染进程内存。
+     * onTrimMemory 可能在 WebView 已销毁（渲染进程 gone、Activity 重建中）时被
+     * 系统回调，此时调用会抛 IllegalStateException 崩溃，必须全程保护。
+     */
+    private void trimWebViewMemory(int level) {
+        try {
+            WebView webView = getBridge() != null ? getBridge().getWebView() : null;
+            if (webView != null) {
+                // WebView 实现了 ComponentCallbacks2，但 onTrimMemory 未直接暴露，
+                // 需通过接口引用调用。
+                ((ComponentCallbacks2) webView).onTrimMemory(level);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "WebView onTrimMemory failed", e);
         }
     }
 
     private void clearWebViewCache() {
-        WebView webView = getBridge() != null ? getBridge().getWebView() : null;
-        if (webView != null) {
-            webView.clearCache(false);
+        try {
+            WebView webView = getBridge() != null ? getBridge().getWebView() : null;
+            if (webView != null) {
+                webView.clearCache(false);
+            }
+        } catch (Exception e) {
+            Log.w(TAG, "WebView clearCache failed", e);
         }
     }
 

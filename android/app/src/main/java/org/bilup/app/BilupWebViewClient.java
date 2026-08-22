@@ -233,32 +233,26 @@ public class BilupWebViewClient extends BridgeWebViewClient {
     /**
      * 处理 WebView 渲染进程消失（崩溃或被系统回收）。
      * <p>
-     * 默认行为（返回 false）会让系统直接终止应用，表现为闪退。这里统一接管：
+     * 默认行为（返回 false）会让系统直接终止应用，表现为闪退。这里接管：
      * <ol>
-     *   <li><b>didCrash() == true</b>（渲染进程崩溃，通常由打开大作品 OOM 引起）：
-     *       首次崩溃清理缓存后重载页面，把"闪退"降级为"重新加载"；短时间反复
-     *       崩溃（持续 OOM）则放弃重载并提示用户，避免"崩溃→重载→再崩溃"死循环。</li>
-     *   <li><b>didCrash() == false</b>（渲染进程被系统回收，常见于打开系统文件
-     *       选择器、多任务切换等后台场景）：默认行为同样会杀应用。这里也接管并
-     *       重载，保证用户从文件选择器返回后应用仍然存活。</li>
+     *   <li><b>didCrash() == true</b>（渲染进程真正崩溃，如打开大作品 OOM）：
+     *       旧 WebView 已不可用，首次尝试清理缓存后重载恢复。</li>
+     *   <li><b>didCrash() == false</b>（渲染进程被系统杀掉以回收内存）：
+     *       Android 官方明确：<b>系统不会自动恢复渲染进程</b>，WebView 同样失效，
+     *       必须由应用主动重载恢复。这里与崩溃场景做相同的恢复处理。</li>
      * </ol>
-     * 无论哪种情况，都会在恢复前通知宿主清理已失效的状态（如文件选择回调），
-     * 避免 onActivityResult 回调到失效 WebView 引发崩溃。
+     * 两种场景都受"连续崩溃上限"保护：短时间反复消失（持续内存不足）时不再
+     * 自动重载，避免"崩溃→重载→再崩溃"死循环（这正是打开作品反复闪退的成因），
+     * 改为提示用户后保持应用存活。
+     * <p>
+     * 注意：官方还建议恢复时创建全新 WebView 实例。Capacitor 应用由框架管理
+     * WebView 生命周期，无法直接重建实例，故退化为对现有 WebView 重新 loadUrl
+     *（回到服务器首页，避免反复加载导致再次崩溃的同一作品页面）。
      */
     @Override
     public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O
                 && detail != null) {
-            long now = SystemClock.elapsedRealtime();
-            if (now - lastRenderCrashTime < RENDER_CRASH_THROTTLE_MS) {
-                // 短时间内再次消失：说明是持续性的内存不足，自动重载只会死循环
-                renderCrashCount++;
-            } else {
-                // 距上次消失已过较久，视为一次新的事件
-                renderCrashCount = 1;
-            }
-            lastRenderCrashTime = now;
-
             // 先通知宿主清理失效状态（文件选择回调等），防止后续崩溃
             if (rendererGoneListener != null) {
                 try {
@@ -268,26 +262,38 @@ public class BilupWebViewClient extends BridgeWebViewClient {
                 }
             }
 
+            // 统计连续消失次数（无论崩溃还是系统回收，只要在窗口内都算一次）
+            long now = SystemClock.elapsedRealtime();
+            if (now - lastRenderCrashTime < RENDER_CRASH_THROTTLE_MS) {
+                renderCrashCount++;
+            } else {
+                renderCrashCount = 1;
+            }
+            lastRenderCrashTime = now;
+
             if (renderCrashCount >= MAX_RENDER_CRASHES_BEFORE_GIVE_UP) {
                 // 连续消失：放弃自动重载，提示用户，避免无限重启
                 notifyCrashTooManyTimes();
                 return true;
             }
 
-            final String url = view != null ? view.getUrl() : null;
-            final WebView targetView = view;
+            // 渲染进程消失后，onRenderProcessGone 回调中的 view 参数可能为 null
+            // （官方文档确认），不能直接依赖它。必须通过 Bridge 获取 Capacitor
+            // 管理中的有效 WebView 实例作为恢复目标，否则 WebView 会永久失效白屏。
+            // 恢复时加载应用入口首页（去掉可能携带的作品参数），而不是重新加载
+            // 可能触发再次崩溃的同一作品页。
             new Handler(Looper.getMainLooper()).post(new Runnable() {
                 @Override
                 public void run() {
                     try {
-                        if (targetView != null) {
-                            // 重载前主动释放内存：清理磁盘缓存 + 渲染进程相关资源。
-                            // 渲染进程已消失，页面状态无法保留，但清理缓存可降低重载时的
-                            // 内存/IO 峰值，提高恢复成功率。
-                            targetView.clearCache(true);
-                            // 重新加载当前页面，让应用恢复到可用状态
-                            targetView.loadUrl(url != null ? url : bridge.getServerUrl());
+                        WebView bridgeWebView = bridge.getWebView();
+                        if (bridgeWebView == null) {
+                            return;
                         }
+                        // 清理缓存释放内存，降低重载时的内存峰值
+                        bridgeWebView.clearCache(true);
+                        // 加载应用入口首页（无作品参数），避免反复加载同一崩溃页
+                        bridgeWebView.loadUrl(getEntryUrl());
                     } catch (Exception ignored) {
                         // 重新加载失败时交给默认行为处理
                     }
@@ -296,6 +302,34 @@ public class BilupWebViewClient extends BridgeWebViewClient {
             return true;
         }
         return super.onRenderProcessGone(view, detail);
+    }
+
+    /**
+     * 获取恢复用的应用入口 URL。
+     * 渲染进程崩溃后加载它（无作品参数），避免反复加载同一崩溃页。
+     * 若 serverUrl 为空则兜底到本地服务器根路径。
+     */
+    private String getEntryUrl() {
+        try {
+            String serverUrl = bridge.getServerUrl();
+            if (serverUrl != null && !serverUrl.isEmpty()) {
+                // 去掉 query 与 fragment，仅保留入口路径，避免带上作品参数
+                int q = serverUrl.indexOf('?');
+                int h = serverUrl.indexOf('#');
+                int cut = -1;
+                if (q >= 0 && h >= 0) {
+                    cut = Math.min(q, h);
+                } else if (q >= 0) {
+                    cut = q;
+                } else if (h >= 0) {
+                    cut = h;
+                }
+                return cut > 0 ? serverUrl.substring(0, cut) : serverUrl;
+            }
+        } catch (Exception ignored) {
+            // 读取失败走兜底
+        }
+        return "https://localhost";
     }
 
     /** 连续崩溃达到该次数后放弃自动重载（避免 OOM 死循环） */
