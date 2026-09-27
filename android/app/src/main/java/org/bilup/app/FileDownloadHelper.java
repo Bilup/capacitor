@@ -126,34 +126,21 @@ public class FileDownloadHelper {
         String safeName = (fileName != null ? fileName : "project.sb3").replace("'", "\\'");
         String safeMime = (mimeType != null ? mimeType : "application/octet-stream").replace("'", "\\'");
 
-        // 与 Java 侧 MAX_BASE64_LENGTH（140MB base64 ≈ 100MB 原始数据）保持一致。
-        // 在 readAsDataURL 之前预检大小：若超限直接放弃，避免 base64 字符串
-        // （膨胀约 33%）在 JS 堆中就 OOM，导致渲染进程崩溃。
+        // 复用 WebViewEnhancer 中的分块流式保存实现（幂等定义）：
+        // 文件按 4MB 分片交给 Java 写入并立即释放，不再需要整份 base64 驻留内存，
+        // 因此原先"超过 100MB 直接放弃"的预检上限已移除，改由 Java 侧统一限制。
         String js = "(function() {" +
+            WebViewEnhancer.STREAM_SAVE_JS +
+            "if (typeof window._bilupStreamSave !== 'function') {" +
+                "console.error('bilup: stream save unavailable');" +
+                "return;" +
+            "}" +
             "var url = '" + safeUrl + "';" +
             "var cached = (window._bilupBlobMap && window._bilupBlobMap[url]);" +
-            "var MAX_BYTES = 100 * 1024 * 1024;" +
-            "function saveBlob(b) {" +
-                "if (b.size > MAX_BYTES) {" +
-                    "console.error('File too large for mobile save (>100MB):', b.size);" +
-                    "try { BilupFileBridge.saveBlob('', '" + safeName + "', '" + safeMime + "'); }" +
-                    "catch(e) {}" +
-                    "return;" +
-                "}" +
-                "var reader = new FileReader();" +
-                "reader.onloadend = function() {" +
-                    "var base64 = reader.result.split(',')[1];" +
-                    "try { BilupFileBridge.saveBlob(base64, '" + safeName + "', '" + safeMime + "'); }" +
-                    "catch(e) { console.error('BilupFileBridge error:', e); }" +
-                "};" +
-                "reader.readAsDataURL(b);" +
-            "}" +
-            "if (cached) { saveBlob(cached); }" +
-            "else {" +
-                "fetch(url).then(function(r) { return r.blob(); })" +
-                ".then(function(b) { saveBlob(b); })" +
-                ".catch(function(e) { console.error('Fetch blob failed:', e); });" +
-            "}" +
+            "if (cached) { window._bilupStreamSave(cached, '" + safeName + "', '" + safeMime + "'); return; }" +
+            "fetch(url).then(function(r) { return r.blob(); })" +
+            ".then(function(b) { window._bilupStreamSave(b, '" + safeName + "', '" + safeMime + "'); })" +
+            ".catch(function(e) { console.error('Fetch blob failed:', e); });" +
         "})();";
 
         Log.d(TAG, "Injecting blob download JS for: " + safeName);
@@ -167,9 +154,9 @@ public class FileDownloadHelper {
     }
 
     /**
-     * 单个文件允许下载的最大字节数（约 200MB）。
-     * 超过该大小的文件放弃下载，避免 ByteArrayOutputStream 全量读入内存时
-     * 抛 OutOfMemoryError（不是 Exception，若漏掉会直接崩溃应用）。
+     * 单个文件允许下载的最大字节数（200MB）。
+     * 改为边下边写的流式保存后，内存占用恒定为 8KB 缓冲区、与文件大小无关；
+     * 此上限仅用于拦截超大文件，避免长时间占用网络与磁盘。
      */
     private static final long MAX_DOWNLOAD_BYTES = 200 * 1024 * 1024L;
 
@@ -182,36 +169,19 @@ public class FileDownloadHelper {
         try {
             return downloadToPublicStorage(fileUrl, fileName, mimeType);
         } catch (Throwable t) {
-            // 捕获 Throwable：大文件下载时可能抛 OutOfMemoryError，必须兜住
+            // 捕获 Throwable：网络/IO 层仍可能抛 Error，必须兜住避免崩溃
             Log.e(TAG, "Download failed: " + fileName, t);
             return null;
         }
     }
 
     /**
-     * 通过 HttpURLConnection 下载并保存到公共 Download/Bilup/ 目录。
+     * 边下载边写入公共 Download/Bilup/ 目录，全程不在内存中缓存整个文件。
      * 按 API 级别选择 MediaStore 或公共存储路径。
      *
      * @return 文件的 content:// URI
      */
     private Uri downloadToPublicStorage(String fileUrl, String fileName, String mimeType) throws Exception {
-        byte[] data = downloadBytes(fileUrl);
-
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            return saveViaMediaStore(data, fileName, mimeType);
-        } else {
-            File file = saveViaPublicStorage(data, fileName);
-            String authority = context.getPackageName() + ".fileprovider";
-            return FileProvider.getUriForFile(context, authority, file);
-        }
-    }
-
-    /**
-     * 从 URL 下载完整的字节数据。
-     * 下载过程中持续校验大小，超过 MAX_DOWNLOAD_BYTES 立即中止，
-     * 避免超大文件把内存耗尽（OOM）崩溃应用。
-     */
-    private byte[] downloadBytes(String fileUrl) throws Exception {
         URL url = new URL(fileUrl);
         HttpURLConnection conn = (HttpURLConnection) url.openConnection();
         conn.setInstanceFollowRedirects(true);
@@ -219,35 +189,29 @@ public class FileDownloadHelper {
         conn.setReadTimeout(30000);
         conn.connect();
 
-        // 服务器声明了 Content-Length 时提前拦截超大文件
-        long contentLength = conn.getContentLengthLong();
-        if (contentLength > MAX_DOWNLOAD_BYTES) {
-            conn.disconnect();
-            throw new IOException("文件过大，无法下载（超过 200MB）");
-        }
-
-        try (InputStream input = conn.getInputStream()) {
-            java.io.ByteArrayOutputStream baos = new java.io.ByteArrayOutputStream();
-            byte[] buffer = new byte[8192];
-            int len;
-            long total = 0;
-            while ((len = input.read(buffer)) != -1) {
-                total += len;
-                if (total > MAX_DOWNLOAD_BYTES) {
-                    throw new IOException("文件过大，无法下载（超过 200MB）");
-                }
-                baos.write(buffer, 0, len);
+        try {
+            // 服务器声明了 Content-Length 时提前拦截超大文件
+            long contentLength = conn.getContentLengthLong();
+            if (contentLength > MAX_DOWNLOAD_BYTES) {
+                throw new IOException("文件过大，无法下载（超过 200MB）");
             }
-            return baos.toByteArray();
+            try (InputStream input = conn.getInputStream()) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    return streamToMediaStore(input, fileName, mimeType);
+                }
+                File file = streamToPublicStorage(input, fileName);
+                String authority = context.getPackageName() + ".fileprovider";
+                return FileProvider.getUriForFile(context, authority, file);
+            }
         } finally {
             conn.disconnect();
         }
     }
 
     /**
-     * API 29+：使用 MediaStore 保存到公共 Download/Bilup/ 目录。
+     * 流式写入 MediaStore（API 29+）。任何一步失败都会删除半成品记录，避免留下不可用文件。
      */
-    private Uri saveViaMediaStore(byte[] data, String fileName, String mimeType) throws Exception {
+    private Uri streamToMediaStore(InputStream input, String fileName, String mimeType) throws Exception {
         ContentResolver resolver = context.getContentResolver();
         ContentValues values = new ContentValues();
         values.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
@@ -257,41 +221,60 @@ public class FileDownloadHelper {
 
         Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
         if (uri == null) {
-            throw new Exception("MediaStore insert returned null");
+            throw new IOException("MediaStore insert returned null");
         }
 
-        try (OutputStream out = resolver.openOutputStream(uri)) {
-            if (out == null) {
-                throw new Exception("无法打开 MediaStore OutputStream");
+        try {
+            try (OutputStream out = resolver.openOutputStream(uri)) {
+                if (out == null) {
+                    throw new IOException("无法打开 MediaStore OutputStream");
+                }
+                copyStream(input, out);
             }
-            out.write(data);
-            out.flush();
+            // 写入完成，标记 IS_PENDING = 0 让文件立即可见
+            ContentValues done = new ContentValues();
+            done.put(MediaStore.Downloads.IS_PENDING, 0);
+            resolver.update(uri, done, null, null);
+
+            Log.i(TAG, "Saved via MediaStore: " + uri);
+            return uri;
+        } catch (Exception e) {
+            try {
+                resolver.delete(uri, null, null);
+            } catch (Exception ignored) {
+                // 清理失败不影响错误上报
+            }
+            throw e;
         }
-
-        values.clear();
-        values.put(MediaStore.Downloads.IS_PENDING, 0);
-        resolver.update(uri, values, null, null);
-
-        Log.i(TAG, "Saved via MediaStore: " + uri.toString());
-        return uri;
     }
 
     /**
-     * API 24-28：通过公共外部存储目录保存。
+     * 流式写入公共存储目录（API 24-28），失败时删除半成品文件。
      */
-    private File saveViaPublicStorage(byte[] data, String fileName) throws Exception {
+    private File streamToPublicStorage(InputStream input, String fileName) throws Exception {
         File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
         File dir = new File(downloadDir, BILUP_DIR);
         if (!dir.exists() && !dir.mkdirs()) {
-            throw new Exception("无法创建目录: " + dir.getAbsolutePath());
+            throw new IOException("无法创建目录: " + dir.getAbsolutePath());
         }
         File file = new File(dir, fileName);
-        try (FileOutputStream fos = new FileOutputStream(file)) {
-            fos.write(data);
-            fos.flush();
+        try {
+            try (OutputStream out = new FileOutputStream(file)) {
+                copyStream(input, out);
+            }
+        } catch (Exception e) {
+            try {
+                if (file.exists()) {
+                    file.delete();
+                }
+            } catch (Exception ignored) {
+                // 删除失败不影响错误上报
+            }
+            throw e;
         }
         Log.i(TAG, "Saved to public storage: " + file.getAbsolutePath());
 
+        // 触发 MediaScanner 扫描，文件立即在各文件管理器中可见
         try {
             MediaScannerConnection.scanFile(context,
                     new String[]{file.getAbsolutePath()}, null, null);
@@ -299,6 +282,24 @@ public class FileDownloadHelper {
             Log.w(TAG, "MediaScanner failed: " + e.getMessage());
         }
         return file;
+    }
+
+    /**
+     * 边读边写，全程只持有一个 8KB 缓冲区；
+     * 同时按累计字节数校验上限，超限立即中止，避免磁盘被超大文件占满。
+     */
+    private void copyStream(InputStream input, OutputStream out) throws IOException {
+        byte[] buffer = new byte[8192];
+        int len;
+        long total = 0;
+        while ((len = input.read(buffer)) != -1) {
+            total += len;
+            if (total > MAX_DOWNLOAD_BYTES) {
+                throw new IOException("文件过大，无法下载（超过 200MB）");
+            }
+            out.write(buffer, 0, len);
+        }
+        out.flush();
     }
 
     /**

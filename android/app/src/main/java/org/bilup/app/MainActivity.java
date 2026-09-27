@@ -30,6 +30,8 @@ public class MainActivity extends BridgeActivity {
     private static final int REQUEST_CODE_FILE_CHOOSER = 200;
     // 保存 WebView 文件选择回调，等待 onActivityResult 返回用户选中的文件
     private ValueCallback<Uri[]> filePathCallback;
+    // 当前的 JS 桥接实例，用于在页面对话失效时中止未完成的分块保存会话
+    private BlobReceiver blobReceiver;
 
     @Override
     protected void load() {
@@ -44,6 +46,8 @@ public class MainActivity extends BridgeActivity {
                     // 必须立即清理，否则用户从系统文件选择器返回时 onActivityResult
                     // 会调用这个失效回调，抛出 IllegalStateException 导致应用崩溃。
                     clearFilePathCallback();
+                    // 未完成的分块保存会话也要丢弃，否则输出流与半成品文件会残留
+                    abortPendingBlobSave();
                 }
             }));
         }
@@ -66,6 +70,21 @@ public class MainActivity extends BridgeActivity {
         }
     }
 
+    /**
+     * 丢弃未完成的分块保存会话。
+     * 页面对话失效（Activity 销毁、渲染进程消失、页面重载）时调用，
+     * 释放输出流并删除半成品文件，避免句柄与磁盘残留。
+     */
+    private void abortPendingBlobSave() {
+        if (blobReceiver != null) {
+            try {
+                blobReceiver.abortBlobSave();
+            } catch (Exception ignored) {
+                // 桥接对象已失效时忽略，不影响主流程
+            }
+        }
+    }
+
     @Override
     public void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -84,7 +103,10 @@ public class MainActivity extends BridgeActivity {
                 // 设置 WebChromeClient（包装原有 client，支持 JS 弹窗）
                 setupWebChromeClient(webView);
                 // 注入 JS 接口必须在 evaluateJavascript 之前
-                webView.addJavascriptInterface(new BlobReceiver(MainActivity.this, webView), "BilupFileBridge");
+                // 页面重载会重新注册桥接：先丢弃上一份页面可能残留的保存会话，再替换实例
+                abortPendingBlobSave();
+                blobReceiver = new BlobReceiver(MainActivity.this, webView);
+                webView.addJavascriptInterface(blobReceiver, "BilupFileBridge");
                 WebViewEnhancer.injectViewportMeta(webView);
                 WebViewEnhancer.injectMobileEnhancements(webView);
                 new FileDownloadHelper(MainActivity.this, webView).setupDownloadListener();
@@ -97,6 +119,7 @@ public class MainActivity extends BridgeActivity {
         // Activity 销毁（含系统低内存回收、配置变化重建）前清理挂起的文件选择回调，
         // 防止 onActivityResult 回调到已销毁的 WebView/Activity 实例而崩溃。
         clearFilePathCallback();
+        abortPendingBlobSave();
         super.onDestroy();
     }
 
@@ -360,9 +383,12 @@ public class MainActivity extends BridgeActivity {
         }
 
         // ============ 资源加载优化 ============
-        // 优先使用 WebView 磁盘缓存（缓存头由 BilupWebViewClient 对静态资源注入），
-        // 避免每次进入编辑器都重新从 APK 读取解压 JS/CSS/素材，显著加快加载速度。
-        settings.setCacheMode(WebSettings.LOAD_CACHE_ELSE_NETWORK);
+        // BilupWebViewClient 已为静态资源（js/css/svg 等）注入 immutable 长缓存头，
+        // 因此 LOAD_DEFAULT 会在 max-age 内直接命中磁盘缓存、不回源，无需解压 APK 内资源。
+        // 不使用 LOAD_CACHE_ELSE_NETWORK：它会无视缓存头直接使用过期缓存，
+        // 导致 HTML 更新后仍加载旧版本。
+        // 缓存模式只在此处设置一次；configureDisplaySettings 里不再重复设置，避免互相覆盖。
+        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
     }
 
     @Override
@@ -441,8 +467,9 @@ public class MainActivity extends BridgeActivity {
         }
 
         settings.setMediaPlaybackRequiresUserGesture(false);
-        settings.setCacheMode(WebSettings.LOAD_DEFAULT);
-        settings.setGeolocationEnabled(true);
+        // 应用未申请定位权限（见 AndroidManifest），前端也无法真正获取定位；
+        // 关闭该能力，避免 WebView 维护无用的定位回调链路。
+        settings.setGeolocationEnabled(false);
 
         webView.setScrollBarStyle(WebView.SCROLLBARS_OUTSIDE_OVERLAY);
     }

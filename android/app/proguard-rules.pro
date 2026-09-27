@@ -11,8 +11,8 @@
 # 它们会被 Capacitor/Bridge 通过反射实例化或作为 WebChromeClient/WebViewClient 使用。
 -keep class org.bilup.app.** { *; }
 
-# WebView 的 @JavascriptInterface 方法必须保留，否则 JS 侧 BilupFileBridge.saveBlob()
-# 会因方法被混淆删除而调用失败。
+# WebView 的 @JavascriptInterface 方法必须保留，否则 JS 侧 BilupFileBridge 的
+# beginBlobSave / appendBlobChunk / endBlobSave / abortBlobSave 会因方法被混淆删除而调用失败。
 -keepclassmembers class org.bilup.app.BlobReceiver {
     public *;
 }

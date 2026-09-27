@@ -23,19 +23,42 @@ import java.io.IOException;
 import java.io.OutputStream;
 
 /**
- * 接收 JavaScript 通过 BilupFileBridge.saveBlob() 传递的 base64 数据，
- * 解码后写入公共 Download/Bilup/ 目录，用户可在系统文件管理器中直接找到。
+ * 接收 JavaScript 通过 BilupFileBridge 传递的作品数据，写入公共 Download/Bilup/ 目录。
  *
- * 保存策略（兼容所有 Android 版本）：
- * - Android 10+ (API 29+)：使用 MediaStore.Downloads（无需权限）
- * - Android 7-9 (API 24-28)：使用 Environment.getExternalStoragePublicDirectory（需 WRITE_EXTERNAL_STORAGE）
+ * <p>采用「分块流式」协议替代原先的「整文件 base64 一次性桥接」：
+ * <pre>
+ *   beginBlobSave(name, mime, totalBytes) → 打开输出流，返回是否成功
+ *   appendBlobChunk(base64Chunk) × N      → 解码并写入一片数据（每片约 4MB）
+ *   endBlobSave() / abortBlobSave()       → 收尾提交或丢弃半成品
+ * </pre>
+ *
+ * <p>原实现需要把整个文件转成 base64 字符串，经 JS 堆 → 桥接层 → Java 堆 → 解码后
+ * 字节数组共 4 份拷贝（base64 本身还膨胀 33%），峰值内存约为文件的 5~6 倍，
+ * 100MB 作品必然 OOM。分块后任一时刻只持有一片（约数百 KB），
+ * <b>峰值内存与文件大小无关</b>，因此不再需要原先 100MB 的硬性上限。
+ *
+ * <p>保存位置（与旧实现一致，用户可在系统文件管理器中直接找到）：
+ * <ul>
+ *   <li>Android 10+ (API 29+)：MediaStore.Downloads，无需权限</li>
+ *   <li>Android 7-9 (API 24-28)：公共 Download/Bilup/ 目录，需 WRITE_EXTERNAL_STORAGE</li>
+ * </ul>
  */
 public class BlobReceiver {
     private static final String TAG = "BilupBlobReceiver";
     private static final String BILUP_DIR = "Bilup";
 
+    /**
+     * 单个文件大小上限（512MB）。
+     * 流式写入后内存占用与文件大小无关，此上限仅用于拦截误触的超大文件，
+     * 避免长时间占用 IO 与磁盘空间，而非内存保护。
+     */
+    private static final long MAX_FILE_BYTES = 512L * 1024 * 1024;
+
     private final Context context;
     private final WebView webView;
+
+    /** 当前进行中的保存会话（同一时刻只允许一个），null 表示无会话。 */
+    private PendingSave pending;
 
     public BlobReceiver(Context context, WebView webView) {
         this.context = context;
@@ -64,128 +87,247 @@ public class BlobReceiver {
         return cleaned;
     }
 
+    // ==================== 分块流式保存协议 ====================
+
     /**
-     * 单个文件允许的最大 base64 长度（约 100MB 原始数据）。
-     * base64 字符串经 JavascriptInterface 桥接会同时存在于 JS 堆、桥接层、Java 堆，
-     * 加上 Base64.decode 产生的 byte[]，超大数据会直接 OOM（OutOfMemoryError 不是
-     * Exception，不会被 try/catch 捕获，会直接崩溃应用）。因此必须在上游限制。
+     * 开始一次保存：创建目标并打开输出流。
+     * 若已有未完成的会话，先丢弃它（避免输出流泄漏）。
+     *
+     * @param totalBytes JS 侧提供的文件总大小，仅用于提前拒绝超大文件
+     * @return true 表示可以开始追加数据；false 表示已拒绝（并已回调失败事件）
      */
-    private static final long MAX_BASE64_LENGTH = 140 * 1024 * 1024L; // 约 100MB 原始数据
-
     @JavascriptInterface
-    public void saveBlob(String base64Data, String fileName, String mimeType) {
-        String safeName = sanitizeFileName(fileName);
-        String safeMime = (mimeType != null && !mimeType.isEmpty()) ? mimeType : "application/octet-stream";
+    public boolean beginBlobSave(String fileName, String mimeType, long totalBytes) {
+        synchronized (this) {
+            // 上一次会话未正常结束（如页面被重载）时先清理，防止句柄与半成品文件泄漏
+            abortLocked();
 
-        Log.d(TAG, "saveBlob called: fileName=" + safeName + ", mimeType=" + safeMime + ", dataLen="
-                + (base64Data != null ? base64Data.length() : 0));
+            String safeName = sanitizeFileName(fileName);
+            String safeMime = (mimeType != null && !mimeType.isEmpty())
+                    ? mimeType : "application/octet-stream";
 
+            if (totalBytes > MAX_FILE_BYTES) {
+                Log.w(TAG, "beginBlobSave rejected, too large: " + fileName + ", bytes=" + totalBytes);
+                notifySaveFailed(safeName);
+                return false;
+            }
+
+            try {
+                PendingSave session = openOutput(safeName, safeMime);
+                session.fileName = safeName;
+                session.mimeType = safeMime;
+                session.totalBytes = totalBytes;
+                pending = session;
+                Log.d(TAG, "beginBlobSave: fileName=" + safeName + ", mimeType=" + safeMime
+                        + ", totalBytes=" + totalBytes);
+                return true;
+            } catch (Throwable t) {
+                Log.e(TAG, "beginBlobSave failed: " + safeName, t);
+                notifySaveFailed(safeName);
+                return false;
+            }
+        }
+    }
+
+    /**
+     * 追加一片数据（base64 字符串，约 4MB 原始数据）。
+     * 解码后立即写入输出流并释放，不在内存中累积。
+     *
+     * @return false 表示会话已失效或写入失败（JS 侧应停止继续发送）
+     */
+    @JavascriptInterface
+    public boolean appendBlobChunk(String base64Chunk) {
+        synchronized (this) {
+            if (pending == null) {
+                Log.w(TAG, "appendBlobChunk without active session");
+                return false;
+            }
+            try {
+                if (base64Chunk != null && !base64Chunk.isEmpty()) {
+                    // 用 NO_WRAP：data URL 中的 base64 不含换行，
+                    // 跳过 DEFAULT 的换行扫描/处理可减少解码耗时。
+                    byte[] data = Base64.decode(base64Chunk, Base64.NO_WRAP);
+                    pending.out.write(data);
+                    pending.bytesWritten += data.length;
+                    if (pending.bytesWritten > MAX_FILE_BYTES) {
+                        throw new IOException("文件过大，无法在移动端保存");
+                    }
+                }
+                return true;
+            } catch (Throwable t) {
+                // 必须捕获 Throwable：解码/写入仍可能抛 OutOfMemoryError，漏掉会直接崩溃
+                Log.e(TAG, "appendBlobChunk failed", t);
+                String name = pending.fileName;
+                abortLocked();
+                notifySaveFailed(name);
+                return false;
+            }
+        }
+    }
+
+    /**
+     * 结束保存：关闭输出流并把文件提交到公共目录（MediaStore 置为可见 / 触发媒体扫描）。
+     *
+     * @return true 表示保存成功
+     */
+    @JavascriptInterface
+    public boolean endBlobSave() {
+        PendingSave session;
+        synchronized (this) {
+            session = pending;
+            pending = null;
+        }
+        if (session == null) {
+            Log.w(TAG, "endBlobSave without active session");
+            return false;
+        }
         try {
-            if (base64Data == null || base64Data.isEmpty()) {
-                throw new IllegalArgumentException("base64Data is null or empty");
-            }
-            if (base64Data.length() > MAX_BASE64_LENGTH) {
-                throw new IOException("文件过大，无法在移动端保存（超过 100MB）");
-            }
-            byte[] data = Base64.decode(base64Data, Base64.DEFAULT);
-            if (data.length == 0) {
+            session.out.flush();
+            session.out.close();
+            if (session.bytesWritten <= 0) {
                 throw new IOException("解码后数据为空");
             }
-            // 保存到公共 Downloads 目录，返回可公开访问的 URI
-            Uri fileUri = saveBytesToPublicDownload(data, safeName, safeMime);
-
-            // 保存成功后：打开文件位置预览 + 通知 JS + Toast
-            notifySaveSuccess(fileUri, safeName, safeMime);
-
-            Log.i(TAG, "Save SUCCESS: " + safeName);
+            Uri fileUri = finalizeOutput(session);
+            notifySaveSuccess(fileUri, session.fileName, session.mimeType);
+            Log.i(TAG, "Save SUCCESS: " + session.fileName + ", bytes=" + session.bytesWritten);
+            return true;
         } catch (Throwable t) {
-            // 必须捕获 Throwable（而非仅 Exception）：大文件解码时可能抛
-            // OutOfMemoryError，若漏掉会直接导致应用崩溃
-            Log.e(TAG, "Save FAILED: " + safeName, t);
-            notifySaveFailed(safeName);
+            Log.e(TAG, "endBlobSave failed: " + session.fileName, t);
+            cleanupOutput(session);
+            notifySaveFailed(session.fileName);
+            return false;
         }
     }
 
     /**
-     * 将字节数据保存到公共 Download/Bilup/ 目录。
-     * - API 29+：通过 MediaStore.Downloads，无需存储权限
-     * - API 24-28：通过外部公共存储目录，需 WRITE_EXTERNAL_STORAGE 权限
-     *
-     * @return 文件的 content:// URI（可在 Intent 中直接使用）
+     * 丢弃当前未完成的保存会话，删除半成品文件。
+     * JS 侧在分片失败时调用；宿主在销毁 / 渲染进程消失时也应调用以释放输出流。
      */
-    private Uri saveBytesToPublicDownload(byte[] data, String fileName, String mimeType) throws Exception {
+    @JavascriptInterface
+    public void abortBlobSave() {
+        synchronized (this) {
+            abortLocked();
+        }
+    }
+
+    /** 调用方需已持有 this 的监视器。 */
+    private void abortLocked() {
+        if (pending == null) return;
+        PendingSave session = pending;
+        pending = null;
+        cleanupOutput(session);
+    }
+
+    // ==================== 输出流生命周期 ====================
+
+    /**
+     * 按 API 级别创建目标并打开输出流。
+     * - API 29+：MediaStore 先插入 IS_PENDING=1 的记录，拿到可写 URI
+     * - API 24-28：直接创建公共存储目录下的文件
+     */
+    private PendingSave openOutput(String fileName, String mimeType) throws Exception {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            return saveViaMediaStore(data, fileName, mimeType);
-        } else {
-            File file = saveViaPublicStorage(data, fileName);
-            // 低版本通过 FileProvider 生成可访问的 URI
-            String authority = context.getPackageName() + ".fileprovider";
-            return FileProvider.getUriForFile(context, authority, file);
-        }
-    }
+            ContentResolver resolver = context.getContentResolver();
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
+            values.put(MediaStore.Downloads.MIME_TYPE, mimeType);
+            values.put(MediaStore.Downloads.IS_PENDING, 1);
+            values.put(MediaStore.Downloads.RELATIVE_PATH,
+                    Environment.DIRECTORY_DOWNLOADS + File.separator + BILUP_DIR);
 
-    /**
-     * API 29+：使用 MediaStore 保存到公共 Download/Bilup/ 目录。
-     * 无需任何存储权限，兼容 Android 10~15+，文件立即在所有文件管理器中可见。
-     */
-    private Uri saveViaMediaStore(byte[] data, String fileName, String mimeType) throws Exception {
-        ContentResolver resolver = context.getContentResolver();
-        ContentValues values = new ContentValues();
-        values.put(MediaStore.Downloads.DISPLAY_NAME, fileName);
-        values.put(MediaStore.Downloads.MIME_TYPE, mimeType);
-        values.put(MediaStore.Downloads.IS_PENDING, 1);
-        // RELATIVE_PATH 指定 Download/Bilup/ 目录
-        values.put(MediaStore.Downloads.RELATIVE_PATH, Environment.DIRECTORY_DOWNLOADS + File.separator + BILUP_DIR);
-
-        Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
-        if (uri == null) {
-            throw new IOException("MediaStore insert returned null");
-        }
-
-        try (OutputStream out = resolver.openOutputStream(uri)) {
+            Uri uri = resolver.insert(MediaStore.Downloads.EXTERNAL_CONTENT_URI, values);
+            if (uri == null) {
+                throw new IOException("MediaStore insert returned null");
+            }
+            OutputStream out = resolver.openOutputStream(uri);
             if (out == null) {
+                try {
+                    resolver.delete(uri, null, null);
+                } catch (Exception ignored) {
+                    // 清理失败不影响错误上报
+                }
                 throw new IOException("无法打开 MediaStore OutputStream");
             }
-            out.write(data);
-            out.flush();
+            return new PendingSave(out, uri, null);
         }
 
-        // 写入完成，标记 IS_PENDING = 0 让文件立即可见
-        values.clear();
-        values.put(MediaStore.Downloads.IS_PENDING, 0);
-        resolver.update(uri, values, null, null);
-
-        Log.i(TAG, "Saved via MediaStore: " + uri.toString());
-        return uri;
-    }
-
-    /**
-     * API 24-28：通过公共外部存储目录保存。
-     * 文件写入后通过 MediaScannerConnection 扫描使其立即可见。
-     */
-    private File saveViaPublicStorage(byte[] data, String fileName) throws Exception {
         File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
         File dir = new File(downloadDir, BILUP_DIR);
         if (!dir.exists() && !dir.mkdirs()) {
             throw new IOException("无法创建目录: " + dir.getAbsolutePath());
         }
         File file = new File(dir, fileName);
-        try (FileOutputStream fos = new FileOutputStream(file)) {
-            fos.write(data);
-            fos.flush();
-        }
-        Log.i(TAG, "Saved to public storage: " + file.getAbsolutePath());
+        return new PendingSave(new FileOutputStream(file), null, file);
+    }
 
-        // 触发 MediaScanner 扫描，文件立即在各文件管理器中可见
+    /**
+     * 提交输出：MediaStore 置为可见（IS_PENDING=0）或触发媒体扫描。
+     *
+     * @return 文件的 content:// URI（可在 Intent 中直接使用）
+     */
+    private Uri finalizeOutput(PendingSave session) throws Exception {
+        if (session.mediaUri != null) {
+            ContentValues values = new ContentValues();
+            values.put(MediaStore.Downloads.IS_PENDING, 0);
+            context.getContentResolver().update(session.mediaUri, values, null, null);
+            Log.i(TAG, "Saved via MediaStore: " + session.mediaUri);
+            return session.mediaUri;
+        }
         try {
             MediaScannerConnection.scanFile(context,
-                    new String[]{file.getAbsolutePath()}, null, null);
+                    new String[]{session.file.getAbsolutePath()}, null, null);
         } catch (Exception e) {
             Log.w(TAG, "MediaScanner failed: " + e.getMessage());
         }
-        return file;
+        Log.i(TAG, "Saved to public storage: " + session.file.getAbsolutePath());
+        String authority = context.getPackageName() + ".fileprovider";
+        return FileProvider.getUriForFile(context, authority, session.file);
     }
 
+    /** 关闭输出流并删除半成品（失败或中止时调用）。 */
+    private void cleanupOutput(PendingSave session) {
+        try {
+            session.out.close();
+        } catch (Exception ignored) {
+            // 已关闭或关闭失败均无需处理
+        }
+        if (session.mediaUri != null) {
+            try {
+                context.getContentResolver().delete(session.mediaUri, null, null);
+            } catch (Exception ignored) {
+                // 记录可能已被删除
+            }
+        } else if (session.file != null) {
+            try {
+                if (session.file.exists()) {
+                    session.file.delete();
+                }
+            } catch (Exception ignored) {
+                // 删除失败不影响主流程
+            }
+        }
+    }
+
+    /** 一次保存会话的可变状态。 */
+    private static final class PendingSave {
+        /** 目标输出流，分片依次写入 */
+        final OutputStream out;
+        /** API 29+ 的 MediaStore 记录 URI，否则为 null */
+        final Uri mediaUri;
+        /** API 24-28 的目标文件，否则为 null */
+        final File file;
+
+        String fileName;
+        String mimeType;
+        long totalBytes;
+        long bytesWritten;
+
+        PendingSave(OutputStream out, Uri mediaUri, File file) {
+            this.out = out;
+            this.mediaUri = mediaUri;
+            this.file = file;
+        }
+    }
 
     // ==================== 保存完成后的处理 ====================
 
@@ -286,25 +428,6 @@ public class BlobReceiver {
         } catch (Exception e) {
             Log.w(TAG, "Failed to open file: " + e.getMessage());
             // 打开文件失败不影响主流程，用户仍可通过 Toast 路径手动查找
-        }
-    }
-
-    // ==================== Toast 辅助 ====================
-
-    private void showToast(final String message) {
-        if (context instanceof android.app.Activity) {
-            ((android.app.Activity) context).runOnUiThread(new Runnable() {
-                @Override
-                public void run() {
-                    try {
-                        Toast.makeText(context, message, Toast.LENGTH_LONG).show();
-                    } catch (Exception e) {
-                        Log.e(TAG, "Toast failed", e);
-                    }
-                }
-            });
-        } else {
-            Log.w(TAG, "Context is not Activity, cannot show toast: " + message);
         }
     }
 }

@@ -14,6 +14,93 @@ public final class WebViewEnhancer {
     }
 
     /**
+     * 分块流式保存 Blob 的 JS 实现（幂等定义，重复注入只定义一次）。
+     * <p>
+     * 通过 BilupFileBridge 的 beginBlobSave / appendBlobChunk / endBlobSave / abortBlobSave
+     * 协议，把 Blob 切成 4MB 分片依次交给 Java 写入并立即释放，避免原先"整份 base64 字符串"
+     * 同时占据 JS 堆、桥接层与 Java 堆（约文件体积 5~6 倍）导致的 OOM。
+     * <p>
+     * 供本类的点击拦截与 {@link FileDownloadHelper} 的 blob 下载共用；
+     * 保存成功/失败由 Java 侧派发 bilupSaveComplete / bilupSaveFailed 事件。
+     */
+    static final String STREAM_SAVE_JS =
+        "if (!window._bilupStreamSave) {" +
+            "window._bilupStreamSave = function(blob, fileName, mimeType) {" +
+                "if (!blob || typeof BilupFileBridge === 'undefined') { console.error('bilup: no blob/bridge'); return; }" +
+                /* 4MB 分片：往返次数比 1MB 减少 75%，固定开销（跨桥调用 + 任务调度）显著下降，
+                   峰值内存仍只有几十 MB 量级，与文件大小无关 */
+                "var CHUNK = 4 * 1024 * 1024;" +
+                "var name = fileName || ('Bilup_project_' + Date.now() + '.sb3');" +
+                "var mime = mimeType || blob.type || 'application/octet-stream';" +
+                "var total = blob.size || 0;" +
+                "var started = false;" +
+                "try { started = BilupFileBridge.beginBlobSave(name, mime, total); } catch (e) { started = false; }" +
+                "if (!started) { console.error('bilup: beginBlobSave rejected'); return; }" +
+                "var aborted = false;" +
+                "function stop() {" +
+                    "if (aborted) return;" +
+                    "aborted = true;" +
+                    "try { BilupFileBridge.abortBlobSave(); } catch (e) {}" +
+                "}" +
+                "function finish() {" +
+                    "try { BilupFileBridge.endBlobSave(); } catch (e) { stop(); }" +
+                "}" +
+                /* 读取一片并返回 base64。readAsDataURL 由浏览器在 IO 线程完成编码，
+                   不占 JS 主线程；这里只负责切分与回调。 */
+                "function readSlice(offset, cb) {" +
+                    "var end = Math.min(offset + CHUNK, total);" +
+                    "var reader = new FileReader();" +
+                    "reader.onload = function() {" +
+                        "var result = reader.result;" +
+                        "var comma = result.indexOf(',');" +
+                        "cb(comma >= 0 ? result.substring(comma + 1) : '', end);" +
+                    "};" +
+                    "reader.onerror = function() { cb(null, end); };" +
+                    "reader.readAsDataURL(blob.slice(offset, end));" +
+                "}" +
+                /* 单槽流水线：任意时刻只有一次读取在途，并且总是"提前多读一片"。
+                   发送第 N 片（同步跨桥 + Java 解码 + 写盘）时，第 N+1 片已在并行读取，
+                   从而把 Blob 读取与 base64 编码的耗时隐藏掉。
+                   原实现是严格串行：读一片 → 发一片 → 再读下一片，读取期间主线程空等。 */
+                "var sendOffset = 0;" +
+                "var ready = {};" +
+                "var readingOffset = -1;" +
+                "var sending = false;" +
+                "function ensureRead(offset) {" +
+                    "if (aborted || offset >= total) return;" +
+                    "if (ready[offset] !== undefined) return;" +
+                    "if (readingOffset !== -1) return;" +
+                    "readingOffset = offset;" +
+                    "readSlice(offset, function(base64, end) {" +
+                        "readingOffset = -1;" +
+                        "if (base64 === null) { stop(); return; }" +
+                        "ready[offset] = { end: end, base64: base64 };" +
+                        /* 先启动下一片读取，再发送当前片：两者并行 */
+                        "ensureRead(end);" +
+                        "pump();" +
+                    "});" +
+                "}" +
+                "function pump() {" +
+                    "if (aborted || sending) return;" +
+                    "if (sendOffset >= total) { finish(); return; }" +
+                    "var item = ready[sendOffset];" +
+                    "if (!item) { ensureRead(sendOffset); return; }" +
+                    "delete ready[sendOffset];" +
+                    "sending = true;" +
+                    "var ok = false;" +
+                    "try { ok = BilupFileBridge.appendBlobChunk(item.base64); } catch (e) { ok = false; }" +
+                    "sending = false;" +
+                    "if (!ok) { stop(); return; }" +
+                    "sendOffset = item.end;" +
+                    "ensureRead(sendOffset);" +
+                    "pump();" +
+                "}" +
+                "if (total === 0) { finish(); return; }" +
+                "ensureRead(0);" +
+            "};" +
+        "}";
+
+    /**
      * 判断 WebView 是否仍可安全使用。
      * <p>
      * {@link WebView#isDestroyed()} 是 API 26+ 才公开的方法，而本应用
@@ -97,20 +184,31 @@ public final class WebViewEnhancer {
             "';" +
             "document.head.appendChild(style);" +
 
-            /* ========== 隐藏受限 UI 元素（精确匹配） ========== */
-            "var restrictedExact = {" +
-                "\"隐私政策\":1,\"Privacy Policy\":1,\"鸣谢\":1,\"Credits\":1," +
-                "\"关于\":1,\"About\":1,\"关于我们\":1,\"About Us\":1," +
-                "\"捐赠\":1,\"Donate\":1,\"切换到作品页面\":1" +
-            "};" +
-            "document.querySelectorAll('button, a').forEach(function(el) {" +
-                "var text = (el.textContent || '').trim();" +
-                "if (restrictedExact[text]) {" +
-                    "el.style.display = 'none'; el.disabled = true;" +
-                "}" +
+            /* ========== 隐藏受限 UI 元素（精确匹配，延到浏览器空闲时执行） ========== */
+            /* 全量 querySelectorAll('button, a') 是 O(节点数) 的一次性扫描，
+               在 onPageLoaded 同步执行会推迟首屏可交互，改到空闲时段再做。 */
+            "var runIdle = window.requestIdleCallback || function(cb) { setTimeout(cb, 1); };" +
+            "runIdle(function() {" +
+                "if (window._bilupRestrictedHidden) return;" +
+                "window._bilupRestrictedHidden = true;" +
+                "var restrictedExact = {" +
+                    "\"隐私政策\":1,\"Privacy Policy\":1,\"鸣谢\":1,\"Credits\":1," +
+                    "\"关于\":1,\"About\":1,\"关于我们\":1,\"About Us\":1," +
+                    "\"捐赠\":1,\"Donate\":1,\"切换到作品页面\":1" +
+                "};" +
+                "document.querySelectorAll('button, a').forEach(function(el) {" +
+                    "var text = (el.textContent || '').trim();" +
+                    "if (restrictedExact[text]) {" +
+                        "el.style.display = 'none'; el.disabled = true;" +
+                    "}" +
+                "});" +
             "});" +
 
-            /* ========== 菜单栏触摸事件增强 ========== */
+            /* ========== 菜单栏触摸事件增强（事件委托，无 MutationObserver） ========== */
+            /* 原实现用 MutationObserver 监听整个 document.body 子树，并在每次 DOM 变更后
+               重扫菜单栏；scratch-gui 渲染期 DOM 变更极频繁，这是老机器上持续的运行时负担。
+               改为在 document 上做一次性委托监听：只在用户真正触摸菜单项时才进入逻辑，
+               菜单栏动态重建也无需重新绑定。 */
             "function hasSubmenu(item) {" +
                 "for (var c = item.firstElementChild; c; c = c.nextElementSibling) {" +
                     "var cn = c.className;" +
@@ -120,61 +218,29 @@ public final class WebViewEnhancer {
                 "}" +
                 "return false;" +
             "}" +
-            "function enhanceMenuBar() {" +
-                "var menuBars = document.querySelectorAll('[class*=\"menuBar\"], [class*=\"menu-bar\"]');" +
-                "menuBars.forEach(function(bar) {" +
-                    "if (bar.dataset.bilupEnhanced) return;" +
-                    "bar.dataset.bilupEnhanced = 'true';" +
-                    "var items = bar.querySelectorAll('[class*=\"menu-item\"], [class*=\"menuItem\"], li, [role=\"menuitem\"]');" +
-                    "items.forEach(function(item) {" +
-                        "item.addEventListener('touchstart', function(e) {" +
-                            "if (hasSubmenu(this)) {" +
-                                "e.preventDefault();" +
-                            "}" +
-                        "}, { passive: false });" +
-                        "item.addEventListener('touchend', function(e) {" +
-                            "if (hasSubmenu(this)) {" +
-                                "var touch = e.changedTouches[0];" +
-                                "var enterEvent = new MouseEvent('mouseenter', {" +
-                                    "bubbles: true, cancelable: true, " +
-                                    "clientX: touch.clientX, clientY: touch.clientY" +
-                                "});" +
-                                "this.dispatchEvent(enterEvent);" +
-                                "e.preventDefault();" +
-                            "}" +
-                            /* 叶子菜单项：不做任何干预，让浏览器原生 touch→click 以 isTrusted=true 触发 */
-                        "}, { passive: false });" +
-                    "});" +
-                "});" +
+            "function menuItemFor(target) {" +
+                "if (!target || !target.closest) return null;" +
+                "var item = target.closest('[class*=\"menu-item\"], [class*=\"menuItem\"], li, [role=\"menuitem\"]');" +
+                "if (!item) return null;" +
+                "return item.closest('[class*=\"menuBar\"], [class*=\"menu-bar\"]') ? item : null;" +
             "}" +
-            "enhanceMenuBar();" +
-            /* 性能优化：MutationObserver 回调做去抖 + 前置过滤。
-               scratch-gui 渲染期 DOM 变更极其频繁，若每个变更都全量 querySelectorAll，
-               会在老机器上造成明显卡顿。这里仅当新增节点确实包含菜单栏元素时才扫描，
-               并且把高频回调聚合到 requestAnimationFrame 去抖，每帧最多执行一次。 */
-            "var _menuTimer = null;" +
-            "function _scheduleMenuEnhance() {" +
-                "if (_menuTimer !== null) return;" +
-                "_menuTimer = requestAnimationFrame(function() {" +
-                    "_menuTimer = null;" +
-                    "enhanceMenuBar();" +
-                "});" +
-            "}" +
-            "var observer = new MutationObserver(function(mutations) {" +
-                "for (var i = 0; i < mutations.length; i++) {" +
-                    "var added = mutations[i].addedNodes;" +
-                    "if (!added || !added.length) continue;" +
-                    "for (var j = 0; j < added.length; j++) {" +
-                        "var n = added[j];" +
-                        "if (n.nodeType !== 1) continue;" +
-                        "var cls = (typeof n.className === 'string') ? n.className : '';" +
-                        "if (cls.indexOf('menuBar') !== -1 || cls.indexOf('menu-bar') !== -1 || cls.indexOf('menuItem') !== -1) {" +
-                            "_scheduleMenuEnhance(); return;" +
-                        "}" +
-                    "}" +
+            "document.addEventListener('touchstart', function(e) {" +
+                "var item = menuItemFor(e.target);" +
+                "if (item && hasSubmenu(item)) e.preventDefault();" +
+            "}, { capture: true, passive: false });" +
+            "document.addEventListener('touchend', function(e) {" +
+                "var item = menuItemFor(e.target);" +
+                "if (!item || !hasSubmenu(item)) return;" +
+                /* 叶子菜单项：不做任何干预，让浏览器原生 touch→click 以 isTrusted=true 触发 */
+                "var touch = e.changedTouches && e.changedTouches[0];" +
+                "if (touch) {" +
+                    "item.dispatchEvent(new MouseEvent('mouseenter', {" +
+                        "bubbles: true, cancelable: true, " +
+                        "clientX: touch.clientX, clientY: touch.clientY" +
+                    "}));" +
                 "}" +
-            "});" +
-            "observer.observe(document.body, { childList: true, subtree: true });" +
+                "e.preventDefault();" +
+            "}, { capture: true, passive: false });" +
 
             /* ========== Blob 下载拦截 ========== */
             /* 拦截 URL.createObjectURL 以缓存 Blob 引用，防止 revokeObjectURL 后 fetch 失败 */
@@ -192,39 +258,25 @@ public final class WebViewEnhancer {
                     "_origRevoke.call(URL, url);" +
                 "};" +
             "}" +
+
+            /* ========== 分块流式保存实现 + Blob 下载拦截 ========== */
+            /* 整份 base64 会同时占据 JS 堆/桥接层/Java 堆，大作品必然 OOM；
+               改为按 4MB 分片流水线流式写入（见 STREAM_SAVE_JS），峰值内存与文件大小无关。 */
+            STREAM_SAVE_JS +
             "document.addEventListener('click', function(e) {" +
                 "var link = e.target.closest('a');" +
-                "if (link && link.href && link.href.indexOf('blob:') === 0) {" +
-                    "e.preventDefault(); e.stopPropagation();" +
-                    "var fileName = link.download || 'Bilup_project_' + Date.now() + '.sb3';" +
-                    "var cachedBlob = window._bilupBlobMap[link.href];" +
-                    "if (cachedBlob) {" +
-                        "var reader = new FileReader();" +
-                        "reader.onloadend = function() {" +
-                            "var base64 = reader.result.split(',')[1];" +
-                            "try { BilupFileBridge.saveBlob(base64, fileName, cachedBlob.type || 'application/octet-stream'); }" +
-                            "catch(err) { console.error('BilupFileBridge err:', err); }" +
-                        "};" +
-                        "reader.onerror = function() { console.error('FileReader failed'); };" +
-                        "reader.readAsDataURL(cachedBlob);" +
-                    "} else {" +
-                        /* 降级：通过 fetch 获取 blob */
-                        "var mimeType = '';" +
-                        "fetch(link.href).then(function(r) {" +
-                            "mimeType = r.headers.get('Content-Type') || r.type || 'application/octet-stream';" +
-                            "return r.blob();" +
-                        "}).then(function(b) {" +
-                            "var reader = new FileReader();" +
-                            "reader.onloadend = function() {" +
-                                "var base64 = reader.result.split(',')[1];" +
-                                "try { BilupFileBridge.saveBlob(base64, fileName, mimeType); }" +
-                                "catch(err) { console.error('BilupFileBridge err:', err); }" +
-                            "};" +
-                            "reader.onerror = function() { console.error('FileReader failed'); };" +
-                            "reader.readAsDataURL(b);" +
-                        "}).catch(function(err) { console.error('Blob fetch err:', err); });" +
-                    "}" +
+                "if (!link || !link.href || link.href.indexOf('blob:') !== 0) return;" +
+                "e.preventDefault(); e.stopPropagation();" +
+                "var fileName = link.download || ('Bilup_project_' + Date.now() + '.sb3');" +
+                "var cachedBlob = window._bilupBlobMap[link.href];" +
+                "if (cachedBlob) {" +
+                    "window._bilupStreamSave(cachedBlob, fileName, cachedBlob.type);" +
+                    "return;" +
                 "}" +
+                /* 降级：通过 fetch 获取 blob */
+                "fetch(link.href).then(function(r) { return r.blob(); })" +
+                ".then(function(b) { window._bilupStreamSave(b, fileName, b.type); })" +
+                ".catch(function(err) { console.error('Blob fetch err:', err); });" +
             "}, true);" +
         "})();";
 
