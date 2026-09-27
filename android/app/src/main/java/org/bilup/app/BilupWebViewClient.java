@@ -1,5 +1,6 @@
 package org.bilup.app;
 
+import android.app.Activity;
 import android.content.Context;
 import android.net.Uri;
 import android.os.Build;
@@ -245,9 +246,13 @@ public class BilupWebViewClient extends BridgeWebViewClient {
      * 自动重载，避免"崩溃→重载→再崩溃"死循环（这正是打开作品反复闪退的成因），
      * 改为提示用户后保持应用存活。
      * <p>
-     * 注意：官方还建议恢复时创建全新 WebView 实例。Capacitor 应用由框架管理
-     * WebView 生命周期，无法直接重建实例，故退化为对现有 WebView 重新 loadUrl
-     *（回到服务器首页，避免反复加载导致再次崩溃的同一作品页面）。
+     * 恢复方式：Android 官方明确要求 onRenderProcessGone 返回 true 后<b>必须销毁旧
+     * WebView 实例并创建新实例</b>；继续使用旧实例（clearCache / loadUrl /
+     * evaluateJavascript）会被 Chromium 判定为"使用了已失效的 WebView"而直接终止
+     * 进程，表现为没有 Java 堆栈的闪退。Capacitor 由框架管理 WebView 生命周期，
+     * 无法原地替换实例，因此改为重建 Activity：旧 Activity 销毁时会通过
+     * Bridge.onDetachedFromWindow() 调用 webView.destroy()，新 Activity 会创建
+     * 全新的 WebView，从而彻底摆脱失效实例。
      */
     @Override
     public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
@@ -272,31 +277,16 @@ public class BilupWebViewClient extends BridgeWebViewClient {
             lastRenderCrashTime = now;
 
             if (renderCrashCount >= MAX_RENDER_CRASHES_BEFORE_GIVE_UP) {
-                // 连续消失：放弃自动重载，提示用户，避免无限重启
+                // 连续消失：放弃自动重建，提示用户，避免"重建→再崩溃"无限循环
                 notifyCrashTooManyTimes();
                 return true;
             }
 
-            // 渲染进程消失后，onRenderProcessGone 回调中的 view 参数可能为 null
-            // （官方文档确认），不能直接依赖它。必须通过 Bridge 获取 Capacitor
-            // 管理中的有效 WebView 实例作为恢复目标，否则 WebView 会永久失效白屏。
-            // 恢复时加载应用入口首页（去掉可能携带的作品参数），而不是重新加载
-            // 可能触发再次崩溃的同一作品页。
+            // 重建 UI（连同 WebView 一起），不要再去碰已经失效的旧实例
             new Handler(Looper.getMainLooper()).post(new Runnable() {
                 @Override
                 public void run() {
-                    try {
-                        WebView bridgeWebView = bridge.getWebView();
-                        if (bridgeWebView == null) {
-                            return;
-                        }
-                        // 清理缓存释放内存，降低重载时的内存峰值
-                        bridgeWebView.clearCache(true);
-                        // 加载应用入口首页（无作品参数），避免反复加载同一崩溃页
-                        bridgeWebView.loadUrl(getEntryUrl());
-                    } catch (Exception ignored) {
-                        // 重新加载失败时交给默认行为处理
-                    }
+                    recreateForRendererGone();
                 }
             });
             return true;
@@ -305,41 +295,34 @@ public class BilupWebViewClient extends BridgeWebViewClient {
     }
 
     /**
-     * 获取恢复用的应用入口 URL。
-     * 渲染进程崩溃后加载它（无作品参数），避免反复加载同一崩溃页。
-     * 若 serverUrl 为空则兜底到本地服务器根路径。
+     * 渲染进程消失后重建 Activity，得到一个全新的 WebView 实例。
+     * <p>
+     * 必须在主线程调用。重建失败时保持应用存活（不再触碰失效的 WebView），
+     * 由用户手动重启应用，避免直接闪退。
      */
-    private String getEntryUrl() {
+    private void recreateForRendererGone() {
         try {
-            String serverUrl = bridge.getServerUrl();
-            if (serverUrl != null && !serverUrl.isEmpty()) {
-                // 去掉 query 与 fragment，仅保留入口路径，避免带上作品参数
-                int q = serverUrl.indexOf('?');
-                int h = serverUrl.indexOf('#');
-                int cut = -1;
-                if (q >= 0 && h >= 0) {
-                    cut = Math.min(q, h);
-                } else if (q >= 0) {
-                    cut = q;
-                } else if (h >= 0) {
-                    cut = h;
-                }
-                return cut > 0 ? serverUrl.substring(0, cut) : serverUrl;
+            Context context = bridge.getContext();
+            if (context instanceof Activity) {
+                ((Activity) context).recreate();
             }
         } catch (Exception ignored) {
-            // 读取失败走兜底
+            // 重建失败时不再做任何 WebView 操作，防止触发进程终止
         }
-        return "https://localhost";
     }
 
-    /** 连续崩溃达到该次数后放弃自动重载（避免 OOM 死循环） */
+    /** 连续崩溃达到该次数后放弃自动重建（避免"重建→再崩溃"死循环） */
     private static final int MAX_RENDER_CRASHES_BEFORE_GIVE_UP = 2;
     /** 两次崩溃之间间隔小于该值（毫秒）则视为同一次持续性崩溃 */
     private static final long RENDER_CRASH_THROTTLE_MS = 10 * 60 * 1000L; // 10 分钟
-    /** 最近一次渲染进程崩溃的时刻（elapsedRealtime） */
-    private long lastRenderCrashTime = 0;
-    /** 连续崩溃计数 */
-    private int renderCrashCount = 0;
+    /**
+     * 最近一次渲染进程崩溃的时刻（elapsedRealtime）。
+     * 必须是 static：恢复方式是重建 Activity，会创建新的 BilupWebViewClient 实例，
+     * 非静态计数会在每次重建时被清零，导致"重建→再崩溃"无限循环。
+     */
+    private static long lastRenderCrashTime = 0;
+    /** 连续崩溃计数（static 原因同上） */
+    private static int renderCrashCount = 0;
 
     /**
      * 连续崩溃时提示用户（切回主线程弹 Toast），避免无限重启造成困惑。

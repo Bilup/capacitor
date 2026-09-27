@@ -11,6 +11,7 @@ import android.os.Bundle;
 import android.util.Log;
 import android.webkit.JsPromptResult;
 import android.webkit.JsResult;
+import android.webkit.MimeTypeMap;
 import android.webkit.ValueCallback;
 import android.webkit.WebChromeClient;
 import android.webkit.WebSettings;
@@ -23,6 +24,10 @@ import androidx.core.content.ContextCompat;
 import com.getcapacitor.BridgeActivity;
 import com.getcapacitor.WebViewListener;
 
+import java.util.LinkedHashSet;
+import java.util.Locale;
+import java.util.Set;
+
 public class MainActivity extends BridgeActivity {
     private static final String TAG = "BilupMainActivity";
     private static final String DEVICE_TYPE_PHONE = "phone";
@@ -32,6 +37,13 @@ public class MainActivity extends BridgeActivity {
     private ValueCallback<Uri[]> filePathCallback;
     // 当前的 JS 桥接实例，用于在页面对话失效时中止未完成的分块保存会话
     private BlobReceiver blobReceiver;
+    /**
+     * 渲染进程是否已消失。
+     * 为 true 时 WebView 已失效（等待 BilupWebViewClient 重建 Activity），
+     * 任何对它的调用都可能被 Chromium 判定为"使用了已失效的 WebView"而终止进程，
+     * 因此内存回收等生命周期回调必须直接跳过。
+     */
+    private boolean rendererGone = false;
 
     @Override
     protected void load() {
@@ -48,6 +60,8 @@ public class MainActivity extends BridgeActivity {
                     clearFilePathCallback();
                     // 未完成的分块保存会话也要丢弃，否则输出流与半成品文件会残留
                     abortPendingBlobSave();
+                    // 标记 WebView 已失效：在 Activity 重建完成前，不要再对它做任何操作
+                    rendererGone = true;
                 }
             }));
         }
@@ -270,13 +284,7 @@ public class MainActivity extends BridgeActivity {
                 clearFilePathCallback();
                 MainActivity.this.filePathCallback = callback;
 
-                Intent intent = fileChooserParams.createIntent();
-                if (intent == null) {
-                    // 兜底：使用系统通用文件选择器
-                    intent = new Intent(Intent.ACTION_GET_CONTENT);
-                    intent.addCategory(Intent.CATEGORY_OPENABLE);
-                    intent.setType("*/*");
-                }
+                Intent intent = buildFileChooserIntent(fileChooserParams);
                 try {
                     startActivityForResult(intent, REQUEST_CODE_FILE_CHOOSER);
                 } catch (Exception e) {
@@ -310,6 +318,56 @@ public class MainActivity extends BridgeActivity {
                 }
             }
         });
+    }
+
+    /**
+     * 构造文件选择 Intent。
+     * <p>
+     * 不使用 {@link WebChromeClient.FileChooserParams#createIntent()}：scratch-gui 的
+     * {@code <input type="file" accept=".sb3,.sb2">} 传下来的是扩展名而不是 MIME，
+     * 而 createIntent() 会把 ".sb3" 原样塞进 Intent 的 type / EXTRA_MIME_TYPES。
+     * ".sb3" 不是合法 MIME 类型，部分系统的文件选择器（DocumentsUI）会因此
+     * 无法列出文件甚至直接报错。
+     * <p>
+     * 这里按 Capacitor 官方 BridgeWebChromeClient 的思路，把以 "." 开头的扩展名
+     * 转换为真实 MIME 类型；转换不到（.sb3 / .sb2 系统无内置映射）时不加任何
+     * MIME 过滤，退化为"可选任意文件"，保证选择器一定能正常打开并选出文件。
+     */
+    private static Intent buildFileChooserIntent(WebChromeClient.FileChooserParams params) {
+        Intent intent = new Intent(Intent.ACTION_GET_CONTENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+
+        if (params == null) {
+            return intent;
+        }
+
+        Set<String> mimeTypes = new LinkedHashSet<>();
+        String[] acceptTypes = params.getAcceptTypes();
+        if (acceptTypes != null) {
+            for (String accept : acceptTypes) {
+                if (accept == null) continue;
+                // accept 可能是 "a,b" 形式，按逗号拆开逐个处理
+                for (String raw : accept.split(",")) {
+                    String part = raw.trim();
+                    if (part.isEmpty()) continue;
+                    if (part.startsWith(".")) {
+                        String mime = MimeTypeMap.getSingleton()
+                                .getMimeTypeFromExtension(part.substring(1).toLowerCase(Locale.ROOT));
+                        if (mime != null) mimeTypes.add(mime);
+                    } else {
+                        mimeTypes.add(part);
+                    }
+                }
+            }
+        }
+        if (!mimeTypes.isEmpty()) {
+            intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes.toArray(new String[0]));
+        }
+        if (params.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE) {
+            intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        }
+        return intent;
     }
 
     @Override
@@ -376,10 +434,15 @@ public class MainActivity extends BridgeActivity {
         // ============ 性能优化（针对老机器） ============
         // 提高渲染进程优先级：老机器多任务时避免 WebView 渲染被系统回收/降频。
         // RENDERER_PRIORITY_IMPORTANT 是最高优先级，保证渲染进程不被系统优先杀死。
-        // 第二个参数 waivedWhenNotVisible=true：WebView 不可见时自动降级，节省资源。
+        //
+        // 第二个参数 waivedWhenNotVisible 必须为 false：
+        // 打开系统文件管理器/文件选择器时，本应用退到后台，WebView 变为"不可见"。
+        // 若该参数为 true，渲染进程会被立刻降为最低优先级，系统在内存压力下将其杀掉；
+        // 用户返回应用时渲染进程已死，WebView 失效，调用方随即闪退。
+        // 本应用常驻大作品（largeHeap），渲染进程被杀代价极高，因此始终保持重要优先级。
         // setRendererPriorityPolicy 仅在 API 26+ 可用
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, true);
+            webView.setRendererPriorityPolicy(WebView.RENDERER_PRIORITY_IMPORTANT, false);
         }
 
         // ============ 资源加载优化 ============
@@ -424,6 +487,7 @@ public class MainActivity extends BridgeActivity {
      * 系统回调，此时调用会抛 IllegalStateException 崩溃，必须全程保护。
      */
     private void trimWebViewMemory(int level) {
+        if (rendererGone) return;
         try {
             WebView webView = getBridge() != null ? getBridge().getWebView() : null;
             if (webView != null) {
@@ -437,6 +501,7 @@ public class MainActivity extends BridgeActivity {
     }
 
     private void clearWebViewCache() {
+        if (rendererGone) return;
         try {
             WebView webView = getBridge() != null ? getBridge().getWebView() : null;
             if (webView != null) {
