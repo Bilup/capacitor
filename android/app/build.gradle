@@ -2,7 +2,7 @@ apply plugin: 'com.android.application'
 apply from: '../signing.gradle'
 
 // Read version from version.json (with fallback for CI environments)
-def appVersion = "2.0.2"
+def appVersion = "2.0.3"
 try {
     def versionFile = rootProject.file('scripts/version.json')
     if (versionFile.exists()) {
@@ -31,7 +31,7 @@ android {
         // Support -PbilupMinSdk=N CLI prop to override minSdkVersion (CI builds by version range)
         minSdkVersion project.findProperty('bilupMinSdk')?.toInteger() ?: rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
+        versionCode 2
         versionName appVersion
         testInstrumentationRunner "androidx.test.runner.AndroidJUnitRunner"
         aaptOptions {

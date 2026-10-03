@@ -1,0 +1,33 @@
+{
+  "description": "Kernel dependency lock for the Android build. The Android app is a shell around scratch-gui, and scratch-gui's own pnpm-lock.yaml decides which scratch-vm / scratch-render build is compiled in. That made the shipped engine a function of whenever CI happened to clone a floating branch, so a build could silently ship a stale kernel. This file is the single source of truth for what is allowed to ship: the exact scratch-gui commit, the engine revisions that commit must resolve to, and the markers that must be present in the compiled bundle. Verified by scripts/verify-engine.mjs. Update with scripts/pin-scratch-gui.mjs after pushing scratch-gui.",
+  "scratchGui": {
+    "repository": "https://github.com/Bilup/scratch-gui.git",
+    "sha": "f589a288bb81c2c7ec7f29b621f92406d980d89c",
+    "why": "chore: update pnpm-lock.yaml - the commit that moved the engine pins off 9de42379 (scratch-vm) and f1e1b860 (scratch-render) onto builds that contain the Android renderer OOM fixes. Its parent 6f214ee87 is what origin/develop pointed at while the 2.0.2 APK shipped pre-fix engines."
+  },
+  "requiredEngines": {
+    "scratch-vm": {
+      "sha": "c316e1f8ebdfb68ee08535a1eabc9d99db30d02a",
+      "contains": "586abbb6",
+      "why": "perf(memory): release orphaned renderer skins when a project is unloaded - releases the outgoing project's skins from Runtime.dispose(), and lowers MAX_CONCURRENT_IMAGE_DECODES from 50 to 12 because the limit is also the peak number of fully decoded bitmaps held at once."
+    },
+    "scratch-render": {
+      "sha": "41b6dfd9829f2a2157086499916baf62b9143853",
+      "contains": "822d71a",
+      "why": "perf(memory): cap texture and silhouette size, release orphaned skins - clamps bitmap costumes to maxTextureDimension, samples silhouettes from at most 256 texels, and stops every unselected costume from pinning the decoded bitmap it was built from."
+    }
+  },
+  "requiredBundleMarkers": [
+    {
+      "marker": "releaseUnattachedSkins",
+      "engine": "scratch-vm",
+      "why": "Runtime.dispose() hands the outgoing project's textures back. Without it, opening project B after A costs A + B, and a single large project never returns its costumes' memory."
+    },
+    {
+      "marker": "_clampBitmapSize",
+      "engine": "scratch-render",
+      "why": "BitmapSkin.setBitmap downsizes anything past maxTextureDimension. Without it a 4096x4096 imported costume costs ~64MB of texture plus ~64MB of silhouette, unbounded."
+    }
+  ],
+  "expectedDecodeConcurrency": 12
+}

@@ -37,23 +37,33 @@ jobs:
           cache: 'npm'
         timeout-minutes: 5
 
+      - name: Verify tag matches scripts/version.json
+        timeout-minutes: 2
+        run: |
+          # 发布产物里 versionName 来自 scripts/version.json，而 Release 名来自 tag。
+          # 两者不一致时用户拿到的 APK 版本号和 tag 对不上，之前就出现过。
+          if [ "${GITHUB_REF_TYPE}" != "tag" ]; then
+            echo "Not a tag build (GITHUB_REF_TYPE=${GITHUB_REF_TYPE}); skipping."
+            exit 0
+          fi
+          EXPECTED="v$(node -p "require('./scripts/version.json').version")"
+          echo "tag=${GITHUB_REF_NAME}  expected=${EXPECTED}"
+          if [ "${GITHUB_REF_NAME}" != "${EXPECTED}" ]; then
+            echo "::error::Tag ${GITHUB_REF_NAME} does not match scripts/version.json (${EXPECTED}). Bump with: node scripts/update-version.js <x.y.z> <versionCode>"
+            exit 1
+          fi
+
       - name: Install dependencies
         run: npm ci
         timeout-minutes: 10
 
-      - name: Fetch scratch-gui repository
+      - name: Fetch scratch-gui at the pinned commit
         timeout-minutes: 15
-        run: |
-          if [ -d scratch-gui ]; then
-            cd scratch-gui
-            if ! git pull origin develop; then
-              cd ..
-              rm -rf scratch-gui
-              git clone -b develop --single-branch --depth 1 https://github.com/Bilup/scratch-gui.git
-            fi
-          else
-            git clone -b develop --single-branch --depth 1 https://github.com/Bilup/scratch-gui.git
-          fi
+        run: npm run fetch:gui
+
+      - name: Verify kernel dependency lock
+        timeout-minutes: 3
+        run: npm run verify:lock
 
       - name: Cache scratch-gui pnpm store
         uses: actions/cache@v4
@@ -72,11 +82,15 @@ jobs:
         timeout-minutes: 5
 
       - name: Install scratch-gui dependencies
-        run: cd scratch-gui && pnpm install
+        run: cd scratch-gui && pnpm install --frozen-lockfile
 
       - name: Build scratch-gui
         timeout-minutes: 20
         run: cd scratch-gui && pnpm run build
+
+      - name: Verify built engine markers
+        timeout-minutes: 5
+        run: npm run verify:build
 
       - name: Sync Capacitor and copy web assets
         timeout-minutes: 10
@@ -232,6 +246,16 @@ jobs:
           echo "Staged APK(s):"
           ls -la staged/
         timeout-minutes: 2
+
+      - name: Verify engine markers inside the APK
+        timeout-minutes: 3
+        run: |
+          # 最后一道门：内核修复是否真的进了产物。2.0.2 的包就是缺
+          # releaseUnattachedSkins / _clampBitmapSize（导入大作品后渲染进程
+          # OOM、黑屏），而流水线当时是绿的 —— 因为没人看过产物里面。
+          for apk in staged/*.apk; do
+            node scripts/verify-engine.mjs bundle "$apk"
+          done
 
       - name: Verify APK signature (v1 required for Android 7-9 install)
         run: |

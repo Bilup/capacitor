@@ -41,19 +41,13 @@ jobs:
         run: npm ci
         timeout-minutes: 10
 
-      - name: Fetch scratch-gui repository
+      - name: Fetch scratch-gui at the pinned commit
         timeout-minutes: 15
-        run: |
-          if [ -d scratch-gui ]; then
-            cd scratch-gui
-            if ! git pull origin develop; then
-              cd ..
-              rm -rf scratch-gui
-              git clone -b develop --single-branch --depth 1 https://github.com/Bilup/scratch-gui.git
-            fi
-          else
-            git clone -b develop --single-branch --depth 1 https://github.com/Bilup/scratch-gui.git
-          fi
+        run: npm run fetch:gui
+
+      - name: Verify kernel dependency lock
+        timeout-minutes: 3
+        run: npm run verify:lock
 
       - name: Cache scratch-gui pnpm store
         uses: actions/cache@v4
@@ -71,12 +65,16 @@ jobs:
           version: 9
         timeout-minutes: 5
 
-      - name: Install scratch-gui dependencies 
-        run: cd scratch-gui && pnpm install
+      - name: Install scratch-gui dependencies
+        run: cd scratch-gui && pnpm install --frozen-lockfile
 
       - name: Build scratch-gui
         timeout-minutes: 20
         run: cd scratch-gui && pnpm run build
+
+      - name: Verify built engine markers
+        timeout-minutes: 5
+        run: npm run verify:build
 
       - name: Sync Capacitor and copy web assets
         timeout-minutes: 10

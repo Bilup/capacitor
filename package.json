@@ -1,6 +1,6 @@
 {
   "name": "bilup-capacitor",
-  "version": "2.0.2",
+  "version": "2.0.3",
   "description": "Bilup Desktop Capacitor Version",
   "repository": {
     "type": "git",
@@ -17,9 +17,13 @@
   "homepage": "https://github.com/Bilup/capacitor#readme",
   "private": true,
   "scripts": {
-    "prebuild": "npm run fetch:gui && npm run build:gui && npm run cap:copy",
-    "fetch:gui": "if [ -d scratch-gui ]; then cd scratch-gui && git pull origin develop; else git clone -b develop --single-branch https://github.com/Bilup/scratch-gui.git; fi",
+    "prebuild": "npm run fetch:gui && npm run verify:lock && npm run build:gui && npm run verify:build && npm run cap:copy",
+    "fetch:gui": "node scripts/fetch-scratch-gui.mjs",
+    "verify:lock": "node scripts/verify-engine.mjs lock",
     "build:gui": "cd scratch-gui && pnpm install --frozen-lockfile && pnpm run build",
+    "verify:build": "node scripts/verify-engine.mjs bundle scratch-gui/build",
+    "verify:apk": "node scripts/verify-engine.mjs bundle",
+    "pin:gui": "node scripts/pin-scratch-gui.mjs",
     "cap:copy": "npx cap copy",
     "cap:sync": "npx cap sync android",
     "cap:open": "npx cap open android"
